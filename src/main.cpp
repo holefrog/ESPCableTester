@@ -178,7 +178,8 @@ void loadCalibration() {
   prefs.end();
 
   tester.setCalibrationData(base, perM);
-  printf("Loaded Calib: 4-Pair OK, useFeet=%d, isCalib=%d\n", useFeet, isCalibrated);
+  printf("Loaded Calib: 4-Pair OK, useFeet=%d, isCalib=%d\n", useFeet,
+         isCalibrated);
 }
 
 void saveCalibration(const uint32_t base[4], const uint32_t perM[4]) {
@@ -272,7 +273,8 @@ void buttonTask(void *pvParameters) {
         clickCount = 0;
       }
     } else if (!btnIsPressed && !isPressed) {
-      if (clickCount > 0 && (millis() - releaseTime > BTN_DOUBLE_CLICK_TIMEOUT_MS)) {
+      if (clickCount > 0 &&
+          (millis() - releaseTime > BTN_DOUBLE_CLICK_TIMEOUT_MS)) {
         if (clickCount == 1) {
           flagSingleClick = true;
           printf("Button: Single Click\n");
