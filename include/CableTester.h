@@ -35,6 +35,12 @@ struct CableStatus {
     uint32_t cycles2;
     uint32_t cycles3;
     uint32_t cycles4;
+
+    // 完整的短路网络图，0=无短路，>0 代表同一个短接网络的 Net ID
+    uint8_t shortNets[8];
+
+    // 是否存在非法的短路（用于决定是否全屏显示图形化Wiremap）
+    bool hasFault;
 };
 
 class CableTester {
@@ -55,7 +61,7 @@ public:
     void setCalibrationData(const uint32_t base[4], const uint32_t perMeter[4]);
     
     // 获取/进行单次电容测量，用于校准模式（求平均值需要多次测量）
-    uint32_t measureCapacitanceCycles(uint8_t txPin, uint8_t rxPin);
+    uint32_t IRAM_ATTR measureCapacitanceCycles(uint8_t txPin, uint8_t rxPin);
 
 private:
     // 测试具体的某一个线对
@@ -71,6 +77,9 @@ private:
     
     // 将电容充电周期数转换为长度
     float cyclesToMeters(uint32_t cycles, int pairIndex);
+
+    // 全矩阵扫盲探测短路网
+    void detectFullWiremap(uint8_t shortNets[8]);
 
     // 校准参数
     uint32_t baseCycles[4];

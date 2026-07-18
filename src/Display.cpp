@@ -92,6 +92,124 @@ void Display::renderResult(const CableStatus& status, bool useFeet, bool isCalib
 }
 
 void Display::drawGraphicalWiremap(int yOffset, const CableStatus& status, bool useFeet) {
+    if (status.hasFault) {
+        // --- DRAW COMPLEX GRAPHICAL SHORT MAP ---
+        // 采用极小字体（5像素宽，7像素高）
+        u8g2.setFont(u8g2_font_5x7_tr);
+        int startY = yOffset + 5; // 如果 yOffset=16，则第一根线 y=21
+        int rowHeight = 6;
+        
+        for (int i = 0; i < 8; i++) {
+            int y = startY + i * rowHeight;
+            char buf[16];
+            snprintf(buf, sizeof(buf), "Pin %d", i + 1);
+            u8g2.drawStr(0, y, buf);
+            
+            // 引脚向右伸出的小横线
+            int lineY = y - 3;
+            u8g2.drawLine(25, lineY, 32, lineY);
+            
+            // 如果这个引脚悬空（没有短路），画一个小的未连接标记 'x'
+            if (status.shortNets[i] == 0) {
+                u8g2.drawStr(34, y, "x");
+            }
+        }
+        
+        // 绘制垂直的短路连线括号 (Brackets)
+        int netX = 38; // 垂直线起始 X 坐标
+        for (int net = 1; net <= 8; net++) {
+            int firstPin = -1;
+            int lastPin = -1;
+            for (int i = 0; i < 8; i++) {
+                if (status.shortNets[i] == net) {
+                    if (firstPin == -1) firstPin = i;
+                    lastPin = i;
+                }
+            }
+            if (firstPin != -1 && firstPin != lastPin) {
+                int y1 = startY + firstPin * rowHeight - 3;
+                int y2 = startY + lastPin * rowHeight - 3;
+                
+                // 画垂直主干线
+                u8g2.drawLine(netX, y1, netX, y2);
+                
+                // 画每一个引脚连接到主干线的水平线
+                for (int i = 0; i < 8; i++) {
+                    if (status.shortNets[i] == net) {
+                        int y = startY + i * rowHeight - 3;
+                        u8g2.drawLine(32, y, netX, y);
+                        // 在交叉点画个小实心矩形强调节点
+                        u8g2.drawBox(netX - 1, y - 1, 3, 3);
+                    }
+                }
+                netX += 8; // 下一个连通网的垂直线往右挪 8 个像素，防止重叠
+            }
+        }
+        // 智能交叉分析 (Smart Crossover Analysis)
+        int pairOfPin[8] = {1, 1, 2, 3, 3, 2, 4, 4}; // Pin index to Pair number
+        int crossPairs[2] = {0, 0};
+        int crossPins[2][2];
+        int crossCount = 0;
+        
+        for (int net = 1; net <= 8; net++) {
+            int pinsInNet[8];
+            int count = 0;
+            for(int i = 0; i < 8; i++) {
+                if(status.shortNets[i] == net) {
+                    pinsInNet[count++] = i;
+                }
+            }
+            if (count == 2) {
+                int pA = pinsInNet[0];
+                int pB = pinsInNet[1];
+                if (pairOfPin[pA] != pairOfPin[pB]) {
+                    if (crossCount < 2) {
+                        crossPins[crossCount][0] = pA;
+                        crossPins[crossCount][1] = pB;
+                        crossPairs[crossCount] = (1 << pairOfPin[pA]) | (1 << pairOfPin[pB]);
+                        crossCount++;
+                    }
+                }
+            }
+        }
+        
+        if (crossCount == 2 && crossPairs[0] == crossPairs[1]) {
+            // We found exactly two cross-pair shorts between the SAME two pairs!
+            int pA = crossPins[0][0];
+            int pB = crossPins[0][1];
+            int pC = crossPins[1][0];
+            int pD = crossPins[1][1];
+            
+            // Ensure pA and pC are in the same pair
+            if (pairOfPin[pA] != pairOfPin[pC]) {
+                int temp = pC; pC = pD; pD = temp;
+            }
+            
+            int pinA = pA + 1; int pinB = pB + 1;
+            int pinC = pC + 1; int pinD = pD + 1;
+            
+            u8g2.setFont(u8g2_font_ncenB08_tr);
+            u8g2.drawStr(netX + 6, yOffset + 15, "SPLIT PAIR");
+            
+            char buf[32];
+            snprintf(buf, sizeof(buf), "P%d <-> P%d", pairOfPin[pA], pairOfPin[pB]);
+            u8g2.drawStr(netX + 6, yOffset + 30, buf);
+            
+            u8g2.setFont(u8g2_font_5x7_tr);
+            snprintf(buf, sizeof(buf), "%d-%d or %d-%d", pinA, pinD, pinC, pinB);
+            u8g2.drawStr(netX + 6, yOffset + 45, buf);
+        } else {
+            // 在右侧空白区域打印常规提示信息
+            u8g2.setFont(u8g2_font_ncenB08_tr);
+            u8g2.drawStr(netX + 8, yOffset + 20, "MISWIRE");
+            u8g2.drawStr(netX + 8, yOffset + 35, "CROSSED");
+        }
+        
+        return;
+    }
+
+    // --- DRAW NORMAL PAIR DISPLAY ---
+    u8g2.setFont(u8g2_font_ncenB08_tr);
     auto drawPair = [&](int y, const char* name, TestResult res, float len, uint8_t shortWire) {
         u8g2.setCursor(0, y);
         u8g2.print(name); 
@@ -122,7 +240,7 @@ void Display::drawGraphicalWiremap(int yOffset, const CableStatus& status, bool 
             u8g2.drawLine(lineX1 + 12, lineY + 4, lineX1 + 18, lineY + 4);
             
             char buf[16];
-            if (shortWire == 0) snprintf(buf, sizeof(buf), "SHT(GND)");
+            if (shortWire == 0) snprintf(buf, sizeof(buf), "SHT(?)");
             else snprintf(buf, sizeof(buf), "SHT(%d)", shortWire);
             u8g2.drawStr(lineX2 + 8, y, buf);
         }

@@ -61,6 +61,11 @@ bool isStatusEqual(const CableStatus& a, const CableStatus& b) {
     if (!checkLen(a.pair3, a.len3, b.len3)) return false;
     if (!checkLen(a.pair4, a.len4, b.len4)) return false;
     
+    if (a.hasFault != b.hasFault) return false;
+    for (int i = 0; i < 8; i++) {
+        if (a.shortNets[i] != b.shortNets[i]) return false;
+    }
+    
     return true;
 }
 
@@ -228,8 +233,9 @@ void setup() {
     
     pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
     
-    // 启动独立任务处理按键，分配到 Core 0，实现物理级别的完全隔离
-    xTaskCreatePinnedToCore(buttonTask, "BtnTask", 2048, NULL, 1, NULL, 0);
+    // 注意：必须放在 Core 1！如果放在 Core 0，会导致 Core 0 的 digitalRead 和 Core 1 的寄存器直读
+    // 在极小概率下发生 APB 总线竞争（Bus Contention），导致 Core 1 测得的 CPU 周期数突然多出 85 个周期（约 0.2 米的误差波动）。
+    xTaskCreatePinnedToCore(buttonTask, "BtnTask", 2048, NULL, 1, NULL, 1);
     
     tester.init();
     display.init();

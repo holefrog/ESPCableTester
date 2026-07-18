@@ -25,18 +25,20 @@ float CableTester::cyclesToMeters(uint32_t cycles, int pairIndex) {
     return (float)(cycles - baseCycles[pairIndex]) / (float)cyclesPerMeter[pairIndex];
 }
 
-uint32_t CableTester::measureCapacitanceCycles(uint8_t txPin, uint8_t rxPin) {
+uint32_t IRAM_ATTR CableTester::measureCapacitanceCycles(uint8_t txPin, uint8_t rxPin) {
     // 1. 介质极化预处理 (Dielectric Pre-conditioning)
-    // 无论之前做过什么测试，先用 3.3V 强力充电 2ms，统一线缆的介质吸收状态 (Soakage)
-    // 这能确保单独测量 (校准时) 和 连续测量 (测试时) 的电容值完全一致！
+    // 强制使用与测量时【完全相同】的电压极性！
+    // 测量时 txPin 是 LOW，rxPin 被拉高到 HIGH。
+    // 所以预热时必须也是 txPin LOW, rxPin HIGH，防止 PVC 介质偶极子反复翻转导致电吸收延迟（Soakage）！
     pinMode(txPin, OUTPUT);
-    digitalWrite(txPin, HIGH);
+    digitalWrite(txPin, LOW);
     pinMode(rxPin, OUTPUT);
-    digitalWrite(rxPin, LOW);
+    digitalWrite(rxPin, HIGH);
     delayMicroseconds(2000); // 使用精确微秒级延时，防止 FreeRTOS 调度引起时序抖动
 
     // 2. 强制彻底放电
     digitalWrite(txPin, LOW);
+    digitalWrite(rxPin, LOW); // 刚才就是漏了这句，导致根本没放电！
     delayMicroseconds(5000); // 确保完全放电到 0V，时序严格固定
 
     // 提前将引脚转为高阻态输入，此时因为没有上拉，电容依然保持 0V
@@ -46,11 +48,13 @@ uint32_t CableTester::measureCapacitanceCycles(uint8_t txPin, uint8_t rxPin) {
     portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
     portENTER_CRITICAL(&mux); // 禁用 RTOS 中断，确保周期计数不被打断
 
-    // 记录起点
-    uint32_t start = ESP.getCycleCount();
+    // 瞬间开启内部上拉电阻，电容开始充电！
+    // 极其关键的防抖优化：gpio_pullup_en 内部有函数调用，且 RTC 引脚和普通引脚执行时间相差数百周期，甚至触发 Cache Miss。
+    // 必须把它放在记录起点之前，才能将这几百个周期的执行误差彻底排除在计数之外！
+    gpio_pullup_en((gpio_num_t)rxPin);
     
-    // 瞬间开启内部上拉电阻，电容开始充电！(底层 API，只需几个时钟周期)
-    gpio_pullup_en((gpio_num_t)rxPin); 
+    // 记录起点（严格在此处打点！）
+    uint32_t start = ESP.getCycleCount();
     
     uint32_t max_cycles = 24000000; // 100ms timeout @ 240MHz
     
@@ -117,55 +121,45 @@ TestResult CableTester::testSinglePair(uint8_t txPin, uint8_t expectedRxPin, flo
         return TestResult::SHORT_OR_CROSS;
     }
 
-    // 1. 设置发送端拉高
+    // 1. 检查 txPin 是否短路到这 8 根线中的任何一根
     pinMode(txPin, OUTPUT);
     digitalWrite(txPin, HIGH);
-    
-    // 给系统一点时间让电平稳定
     delay(2);
-    
-    // 2. 检查期望的接收引脚是否读到高电平
-    bool expectedHigh = (digitalRead(expectedRxPin) == HIGH);
-    
-    // 3. 检查是否有其它非预期引脚也变高了（意味着存在短路或错线干扰）
     bool hasShort = false;
     for (int i = 0; i < 8; i++) {
-        uint8_t currentPin = PINS[i];
-        
-        // 忽略当前正在测试的这一对引脚
-        if (currentPin == txPin || currentPin == expectedRxPin) {
-            continue; 
-        }
-        
-        if (digitalRead(currentPin) == HIGH) {
-            Serial.printf("[DEBUG] txPin=%d is HIGH, but unexpected pin=%d is ALSO HIGH!\n", txPin, currentPin);
+        if (PINS[i] == txPin) continue;
+        if (digitalRead(PINS[i]) == HIGH) {
             hasShort = true;
-            for(int j = 0; j < 8; j++) {
-                if (PINS[j] == currentPin) {
-                    outShortWire = j + 1;
-                    break;
-                }
-            }
-            break; // 卫语句：一旦发现一根引脚存在短路，即可跳出循环
+            outShortWire = i + 1; // 1-8 代表具体的物理引脚
+            break;
         }
     }
-    
-    // 4. 测试完毕，立刻将发送端恢复为下拉输入，保持隔离
-    // 关键修复：在切回 INPUT 之前，主动输出 LOW 强行释放线缆和面包板上的残留寄生电荷（消除浮空干扰）
     digitalWrite(txPin, LOW);
-    delay(2); // 留出充足时间让所有引脚彻底放电，恢复 0V
     pinMode(txPin, INPUT_PULLDOWN);
-    
-    // 5. 根据读取结果判定该线对的最终状态
+
+    // 2. 如果 txPin 没发现短路，继续检查 rxPin 是否短路到这 8 根线中的任何一根
+    if (!hasShort) {
+        pinMode(expectedRxPin, OUTPUT);
+        digitalWrite(expectedRxPin, HIGH);
+        delay(2);
+        for (int i = 0; i < 8; i++) {
+            if (PINS[i] == expectedRxPin) continue;
+            if (digitalRead(PINS[i]) == HIGH) {
+                hasShort = true;
+                outShortWire = i + 1;
+                break;
+            }
+        }
+        digitalWrite(expectedRxPin, LOW);
+        pinMode(expectedRxPin, INPUT_PULLDOWN);
+    }
+
+    // 3. 根据读取结果判定该线对的最终状态
     if (hasShort) {
         return TestResult::SHORT_OR_CROSS;
     }
     
-    if (expectedHigh) {
-        return TestResult::PASS;
-    }
-    
-    // 如果是 OPEN，利用寄生电容估算长度
+    // 如果没短路也没通，说明是正常的悬空开路状态，利用寄生电容估算长度
     // 实施【锁相积分采样 (Phase-Locked Sampling)】：
     // 强制每次采样耗时精确为 10,000 微秒 (10ms)。
     // 连续采样 10 次，总耗时精确等于 100.00 毫秒。
@@ -183,6 +177,13 @@ TestResult CableTester::testSinglePair(uint8_t txPin, uint8_t expectedRxPin, flo
     }
     uint32_t avgCycles = totalCycles / 10;
     outCycles = avgCycles;
+    
+    // 如果出现了超时，说明是对地严重漏电或未知死短路
+    if (outCycles >= 20000000) {
+        outShortWire = 0; // 0 代表对地或未知死短路
+        return TestResult::SHORT_OR_CROSS;
+    }
+    
     outLength = cyclesToMeters(avgCycles, pairIndex);
     
     // 调试信息：打印原始周期数，方便排查校准问题
@@ -198,19 +199,138 @@ CableStatus CableTester::runTest() {
     status.cycles1 = 0; status.cycles2 = 0; status.cycles3 = 0; status.cycles4 = 0;
     status.shortWire1 = 255; status.shortWire2 = 255; status.shortWire3 = 255; status.shortWire4 = 255;
     
-    // 业务目的：远端将线两两短接，近端发送一次脉冲，就可以验证这两根线的回路连通性
+    // 1. 全局短路网络扫描
+    detectFullWiremap(status.shortNets);
     
-    // 测试线对 1：Pin 1(橙白) 和 Pin 2(橙)
-    status.pair1 = testSinglePair(13, 14, status.len1, 0, status.cycles1, status.shortWire1); // Pair 1: 1-2 (橙色对)
+    // 2. 识别合法的 "PASS" (即正常的远端线对物理环回)
+    // 条件：某对线的 TX 和 RX 位于同一个短路网中，并且这个网里没有第三者
+    auto isPairPass = [&](int txIdx, int rxIdx) {
+        if (status.shortNets[txIdx] == 0) return false;
+        if (status.shortNets[txIdx] != status.shortNets[rxIdx]) return false;
+        
+        int count = 0;
+        for (int i = 0; i < 8; i++) {
+            if (status.shortNets[i] == status.shortNets[txIdx]) count++;
+        }
+        return count == 2;
+    };
     
-    // 测试线对 2：Pin 3(绿白) 和 Pin 6(绿)
-    status.pair2 = testSinglePair(25, 32, status.len2, 1, status.cycles2, status.shortWire2); // Pair 2: 3-6 (绿色对)
+    bool passPair[4];
+    passPair[0] = isPairPass(0, 1); // 1-2
+    passPair[1] = isPairPass(2, 5); // 3-6 (PINS[2]=25, PINS[5]=32)
+    passPair[2] = isPairPass(3, 4); // 4-5 (PINS[3]=26, PINS[4]=27)
+    passPair[3] = isPairPass(6, 7); // 7-8
     
-    // 测试线极 3：Pin 4(蓝) 和 Pin 5(蓝白)
-    status.pair3 = testSinglePair(26, 27, status.len3, 2, status.cycles3, status.shortWire3); // Pair 3: 4-5 (蓝色对)
+    Serial.printf("[DEBUG] shortNets: %d %d %d %d %d %d %d %d | passPair: %d %d %d %d\n",
+        status.shortNets[0], status.shortNets[1], status.shortNets[2], status.shortNets[3],
+        status.shortNets[4], status.shortNets[5], status.shortNets[6], status.shortNets[7],
+        passPair[0], passPair[1], passPair[2], passPair[3]);
     
-    // 测试线对 4：Pin 7(棕白) 和 Pin 8(棕)
-    status.pair4 = testSinglePair(33, 23, status.len4, 3, status.cycles4, status.shortWire4); // Pair 4: 7-8 (棕色对)
+    // 3. 判断是否需要全屏绘制 Graphical Wiremap (存在非法的短路)
+    // 我们不再清空 shortNets，保留它以便全屏画图时能完整展示所有连通关系
+    status.hasFault = false;
+    for (int i = 0; i < 8; i++) {
+        if (status.shortNets[i] != 0) {
+            bool inPassPair = false;
+            for (int p = 0; p < 4; p++) {
+                if (passPair[p]) {
+                    int txIdx, rxIdx;
+                    if (p == 0) { txIdx = 0; rxIdx = 1; }
+                    else if (p == 1) { txIdx = 2; rxIdx = 5; }
+                    else if (p == 2) { txIdx = 3; rxIdx = 4; }
+                    else { txIdx = 6; rxIdx = 7; }
+                    
+                    if (i == txIdx || i == rxIdx) {
+                        inPassPair = true;
+                        break;
+                    }
+                }
+            }
+            if (!inPassPair) {
+                status.hasFault = true;
+                break;
+            }
+        }
+    }
+    
+    // 4. 逐个线对进行最终判定和测长
+    auto testOrSkip = [&](uint8_t txPin, uint8_t rxPin, float& outLen, int pairIdx, uint32_t& outCycles, uint8_t& outShort) {
+        // 如果是合法的远端环回，直接返回 PASS
+        if (passPair[pairIdx]) {
+            outShort = 255;
+            outLen = 0.0f;
+            outCycles = 0;
+            return TestResult::PASS;
+        }
+        
+        int txIdx, rxIdx;
+        if (pairIdx == 0) { txIdx = 0; rxIdx = 1; }
+        else if (pairIdx == 1) { txIdx = 2; rxIdx = 5; }
+        else if (pairIdx == 2) { txIdx = 3; rxIdx = 4; }
+        else { txIdx = 6; rxIdx = 7; }
+        
+        // 如果引脚参与了非法的短路网络（被别人短接了），或者就是个错误的短路，直接跳过测长以防超时
+        if (status.shortNets[txIdx] != 0 || status.shortNets[rxIdx] != 0) {
+            outShort = 255;
+            return TestResult::SHORT_OR_CROSS;
+        }
+        
+        return testSinglePair(txPin, rxPin, outLen, pairIdx, outCycles, outShort);
+    };
+    
+    status.pair1 = testOrSkip(13, 14, status.len1, 0, status.cycles1, status.shortWire1); // Pair 1: 1-2 (橙色对)
+    status.pair2 = testOrSkip(25, 32, status.len2, 1, status.cycles2, status.shortWire2); // Pair 2: 3-6 (绿色对)
+    status.pair3 = testOrSkip(26, 27, status.len3, 2, status.cycles3, status.shortWire3); // Pair 3: 4-5 (蓝色对)
+    status.pair4 = testOrSkip(33, 23, status.len4, 3, status.cycles4, status.shortWire4); // Pair 4: 7-8 (棕色对)
     
     return status;
+}
+
+void CableTester::detectFullWiremap(uint8_t shortNets[8]) {
+    // 强制所有引脚进入下拉输入状态，防止前一次测长后留下 Output 或悬空浮高
+    for (int i = 0; i < 8; i++) {
+        pinMode(PINS[i], INPUT_PULLDOWN);
+    }
+
+    for (int i = 0; i < 8; i++) {
+        shortNets[i] = 0;
+    }
+    
+    resetAllPins();
+    
+    uint8_t currentNetId = 1;
+    
+    // 采用全遍历：依次将每个引脚拉高，检查其余引脚
+    for (int i = 0; i < 8; i++) {
+        pinMode(PINS[i], OUTPUT);
+        digitalWrite(PINS[i], HIGH);
+        delay(2);
+        
+        for (int j = i + 1; j < 8; j++) {
+            if (digitalRead(PINS[j]) == HIGH) {
+                // 发现物理连通
+                if (shortNets[i] == 0 && shortNets[j] == 0) {
+                    shortNets[i] = currentNetId;
+                    shortNets[j] = currentNetId;
+                    currentNetId++;
+                } else if (shortNets[i] != 0 && shortNets[j] == 0) {
+                    shortNets[j] = shortNets[i];
+                } else if (shortNets[i] == 0 && shortNets[j] != 0) {
+                    shortNets[i] = shortNets[j];
+                } else if (shortNets[i] != shortNets[j]) {
+                    // 合并两个连通网
+                    uint8_t targetNet = shortNets[i];
+                    uint8_t oldNet = shortNets[j];
+                    for (int k = 0; k < 8; k++) {
+                        if (shortNets[k] == oldNet) {
+                            shortNets[k] = targetNet;
+                        }
+                    }
+                }
+            }
+        }
+        
+        digitalWrite(PINS[i], LOW);
+        pinMode(PINS[i], INPUT_PULLDOWN);
+    }
 }
