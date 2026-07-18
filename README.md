@@ -78,7 +78,7 @@
 3. PlatformIO 会自动读取 `platformio.ini` 并下载 `U8g2` 库和 ESP32 工具链。
 4. 将 ESP32 插入电脑，点击 Antigravity IDE 底部状态栏上的 **"→" (Upload)** 按钮即可完成全自动编译与烧录。
 
-80: 
+
 
 ## 🔮 TDR 测长“黑科技”深度揭秘
 
