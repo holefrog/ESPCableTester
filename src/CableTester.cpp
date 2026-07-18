@@ -6,8 +6,8 @@ const uint8_t CableTester::PINS[8] = {13, 14, 25, 26, 27, 32, 33, 23};
 
 CableTester::CableTester() {
     for (int i = 0; i < 4; i++) {
-        baseCycles[i] = 150;
-        cyclesPerMeter[i] = 540;
+        baseCycles[i] = DEFAULT_BASE_CYCLES;
+        cyclesPerMeter[i] = DEFAULT_CYCLES_PER_M;
     }
 }
 
@@ -19,7 +19,7 @@ void CableTester::setCalibrationData(const uint32_t base[4], const uint32_t perM
 }
 
 float CableTester::cyclesToMeters(uint32_t cycles, int pairIndex) {
-    if (cycles >= 20000000) return 0.0f; // 如果达到了超时阈值，说明是引脚对地短路，此时不应该输出长度
+    if (cycles >= TIMEOUT_CYCLES) return 0.0f; // 如果达到了超时阈值，说明是引脚对地短路，此时不应该输出长度
     
     if (cycles <= baseCycles[pairIndex]) return 0.0f;
     return (float)(cycles - baseCycles[pairIndex]) / (float)cyclesPerMeter[pairIndex];
@@ -56,7 +56,7 @@ uint32_t IRAM_ATTR CableTester::measureCapacitanceCycles(uint8_t txPin, uint8_t 
     // 记录起点（严格在此处打点！）
     uint32_t start = ESP.getCycleCount();
     
-    uint32_t max_cycles = 24000000; // 100ms timeout @ 240MHz
+    uint32_t max_cycles = MAX_POLL_CYCLES; // timeout @ 240MHz
     
     // 轮询等待直到引脚变为高电平（越过内部逻辑阈值）
     // 【极其关键】由于 digitalRead 是放在 Flash 里的库函数，
@@ -166,20 +166,20 @@ TestResult CableTester::testSinglePair(uint8_t txPin, uint8_t expectedRxPin, flo
     // 100ms 是 50Hz (20ms周期) 的完美 5 倍，也是 60Hz (16.66ms周期) 的完美 6 倍！
     // 这种数学积分能 100% 抵消空间中市电辐射造成的模拟底噪和量化抖动！
     uint32_t totalCycles = 0;
-    for(int i = 0; i < 10; i++) {
+    for(int i = 0; i < PHASE_LOCK_SAMPLES; i++) {
         uint32_t t0 = micros();
         totalCycles += measureCapacitanceCycles(txPin, expectedRxPin);
         
         // 锁相循环：死等，直到本次采样消耗的时间精确达到 10,000 微秒
-        while (micros() - t0 < 10000) {
+        while (micros() - t0 < PHASE_LOCK_INTERVAL_US) {
             // busy wait
         }
     }
-    uint32_t avgCycles = totalCycles / 10;
+    uint32_t avgCycles = totalCycles / PHASE_LOCK_SAMPLES;
     outCycles = avgCycles;
     
     // 如果出现了超时，说明是对地严重漏电或未知死短路
-    if (outCycles >= 20000000) {
+    if (outCycles >= TIMEOUT_CYCLES) {
         outShortWire = 0; // 0 代表对地或未知死短路
         return TestResult::SHORT_OR_CROSS;
     }

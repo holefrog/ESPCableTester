@@ -53,9 +53,16 @@ public:
     // 执行一次完整的扫描测试，并返回状态结构体
     CableStatus runTest();
 
-    // 校准常量：76英寸（约1.9304米）
     static constexpr float CALIBRATION_CABLE_LENGTH_M = 1.9304f;
     static constexpr const char* CALIBRATION_CABLE_NAME = "76-inch";
+
+    // 测试与校准相关常量
+    static constexpr uint32_t DEFAULT_BASE_CYCLES = 150;
+    static constexpr uint32_t DEFAULT_CYCLES_PER_M = 540;
+    static constexpr uint32_t TIMEOUT_CYCLES = 20000000;
+    static constexpr uint32_t MAX_POLL_CYCLES = 24000000; // 100ms @ 240MHz
+    static constexpr uint32_t PHASE_LOCK_INTERVAL_US = 10000;
+    static constexpr int PHASE_LOCK_SAMPLES = 10;
 
     // 设置校准数据（由外层通过 Preferences 加载后注入）
     void setCalibrationData(const uint32_t base[4], const uint32_t perMeter[4]);
