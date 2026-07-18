@@ -424,7 +424,7 @@ bool CableTester::isStatusEqual(const CableStatus &a, const CableStatus &b) {
       a.shortWire3 != b.shortWire3 || a.shortWire4 != b.shortWire4)
     return false;
 
-  auto checkLen = [](TestResult res, float l1, float l2) {
+  auto checkLen = [&](TestResult res, float l1, float l2) {
     if (res == TestResult::OPEN) {
       if (abs(l1 - l2) > LENGTH_CHANGE_THRESHOLD_M)
         return false;

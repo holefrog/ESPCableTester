@@ -1,29 +1,26 @@
 #include "CableTester.h"
 #include "Display.h"
+#include "ButtonHandler.h"
+#include "AppConfig.h"
 #include <Arduino.h>
-#include <Preferences.h>
 
-// 实例化功能模块
 CableTester tester;
 Display display;
-Preferences prefs;
 
-// 状态缓存
 CableStatus lastStatus;
 bool isFirstRun = true;
+
 const unsigned long SLEEP_TIMEOUT_MINUTES = 5;
-volatile uint32_t lastActivityTime = 0;
+const uint32_t UNCALIBRATED_WARNING_TIMEOUT_MS = 8000;
+uint32_t warningStartTime = 0;
+uint32_t tempBaseCycles[4] = {0, 0, 0, 0};
 
-volatile bool flagSingleClick = false;
-volatile bool flagDoubleClick = false;
-volatile bool flagLongPress = false;
+// 防抖机制：连续测得多少次相同的结果才视为状态稳定并保存历史记录
+const int STABLE_READING_COUNT = 3;
 
-const int MAX_HISTORY = 10;
-CableStatus historyLogs[MAX_HISTORY];
-int historyCount = 0;
-int historyIndex = 0;
+// 主状态机主循环 (loop) 的间隔延时
+const uint32_t MAIN_LOOP_DELAY_MS = 20;
 
-// 校准状态机
 enum AppState {
   STATE_UNCALIBRATED_WARNING,
   STATE_NORMAL,
@@ -32,285 +29,23 @@ enum AppState {
   STATE_CALIB_WAIT_76INCH,
   STATE_SETTINGS
 };
+
 AppState appState = STATE_NORMAL;
-uint32_t btnPressStart = 0;
-bool btnWasPressed = false;
-uint32_t tempBaseCycles[4] = {0, 0, 0, 0};
-bool useFeet = true;       // 默认单位为 feet
-bool isCalibrated = false; // 是否已经校准过
-bool soundOn = true;
 int menuIndex = 0;
 
-const uint32_t UNCALIBRATED_WARNING_TIMEOUT_MS = 8000;
-const uint32_t BOOT_LONG_PRESS_MS = 2000; // 长按判断阈值
-uint32_t warningStartTime = 0;
-
-const int BOOT_BTN_PIN = 0;
-
-// ========================
-// 业务与时序常量定义区
-// ========================
-
-// 过滤长度跳动的阈值，变化超过此值才刷新UI并存入历史（单位：米）
-// [建议值: 0.2f ~ 0.5f] 设得越小越灵敏，但容易因手指碰触线缆导致频繁存历史
-const float LENGTH_CHANGE_THRESHOLD_M = 0.2f;
-
-// 判断是否"完全没插线"的容差长度阈值，低于此值视为未接线（单位：米）
-// [建议值: 0.5f ~ 1.0f] 由于接头处存在寄生电容，必须留有余量
-const float NO_CABLE_LENGTH_THRESHOLD_M = 0.5f;
-
-// 校准测试前的电缆极化预热循环次数（让电容趋于稳定）
-// [建议值: 10 ~ 20] 太少会导致刚开机时测长偏短，太多会增加校准等待时间
-const int CALIB_PREWARM_LOOPS = 10;
-
-// 校准预热循环之间的延时（毫秒）
-// [建议值: 50] 建议与主循环延时保持一致，真实模拟工作频率
-const uint32_t CALIB_PREWARM_DELAY_MS = 50;
-
-// 校准时，单根线采样的平均次数，次数越多越精准
-// [建议值: 16 ~ 32] 取决于您对校准精度（0.1米级）的要求
-const int CALIB_SAMPLES = 16;
-
-// 校准采样之间的间隔延时，用于模拟主循环真实测试节奏（毫秒）
-// [建议值: 50]
-const uint32_t CALIB_SAMPLE_DELAY_MS = 50;
-
-// 按键双击的判定超时时间（毫秒），在此时间内连击两次算双击
-// [建议值: 300 ~ 500] 设小了需要按得很快，设大了会感觉单击判定有延迟
-const uint32_t BTN_DOUBLE_CLICK_TIMEOUT_MS = 400;
-
-// 后台按键扫描任务的轮询间隔（毫秒），影响按键灵敏度
-// [建议值: 10 ~ 20] 避免频繁唤醒 CPU，20ms 是标准机械按键防抖周期
-const uint32_t BTN_POLL_INTERVAL_MS = 20;
-
-// 防抖机制：连续测得多少次相同的结果才视为状态稳定并保存历史记录
-// [建议值: 3 ~ 5] 根据测量的周期（约100ms/线），3 次相当于稳定 1.2 秒才保存
-const int STABLE_READING_COUNT = 3;
-
-// 主状态机主循环 (loop) 的间隔延时（毫秒）
-// [建议值: 20] 如果想要屏幕刷新更丝滑可以调低，但耗电会增加
-const uint32_t MAIN_LOOP_DELAY_MS = 20;
-
-// 辅助函数：比对前后两次状态是否发生实质性变化（包括长度变化 > 0.2m）
-bool isStatusEqual(const CableStatus &a, const CableStatus &b) {
-  if (a.pair1 != b.pair1 || a.pair2 != b.pair2 || a.pair3 != b.pair3 ||
-      a.pair4 != b.pair4)
-    return false;
-  if (a.shortWire1 != b.shortWire1 || a.shortWire2 != b.shortWire2 ||
-      a.shortWire3 != b.shortWire3 || a.shortWire4 != b.shortWire4)
-    return false;
-
-  // 如果是断路，检查长度是否有明显变化 (>0.2m 防止数值轻微抖动引起频繁刷屏)
-  auto checkLen = [](TestResult res, float l1, float l2) {
-    if (res == TestResult::OPEN) {
-      if (abs(l1 - l2) > LENGTH_CHANGE_THRESHOLD_M)
-        return false;
-    }
-    return true;
-  };
-
-  if (!checkLen(a.pair1, a.len1, b.len1))
-    return false;
-  if (!checkLen(a.pair2, a.len2, b.len2))
-    return false;
-  if (!checkLen(a.pair3, a.len3, b.len3))
-    return false;
-  if (!checkLen(a.pair4, a.len4, b.len4))
-    return false;
-
-  if (a.hasFault != b.hasFault)
-    return false;
-  for (int i = 0; i < 8; i++) {
-    if (a.shortNets[i] != b.shortNets[i])
-      return false;
-  }
-
-  return true;
-}
-
-// 辅助函数：判断是否空载（所有线都是 OPEN，且长度都接近 0）
-bool isAllOpen(const CableStatus &status) {
-  return (status.pair1 == TestResult::OPEN &&
-          status.pair2 == TestResult::OPEN &&
-          status.pair3 == TestResult::OPEN && status.pair4 == TestResult::OPEN);
-}
-
-// 辅助函数：判断是否真的没插线（全断且长度小于 0.5m）
-bool isNoCable(const CableStatus &status) {
-  if (!isAllOpen(status))
-    return false;
-  float maxL = 0;
-  if (status.len1 > maxL)
-    maxL = status.len1;
-  if (status.len2 > maxL)
-    maxL = status.len2;
-  if (status.len3 > maxL)
-    maxL = status.len3;
-  if (status.len4 > maxL)
-    maxL = status.len4;
-  return (maxL < NO_CABLE_LENGTH_THRESHOLD_M);
-}
-
-// 辅助函数：判断该状态是否包含有效的“实际长度”
-bool hasActualLength(const CableStatus &status) {
-  float maxL = 0;
-  if (status.pair1 == TestResult::OPEN && status.len1 > maxL)
-    maxL = status.len1;
-  if (status.pair2 == TestResult::OPEN && status.len2 > maxL)
-    maxL = status.len2;
-  if (status.pair3 == TestResult::OPEN && status.len3 > maxL)
-    maxL = status.len3;
-  if (status.pair4 == TestResult::OPEN && status.len4 > maxL)
-    maxL = status.len4;
-  return (maxL >= NO_CABLE_LENGTH_THRESHOLD_M);
-}
-
-void loadCalibration() {
-  prefs.begin("cable_test", true);  // 只读模式
-  isCalibrated = prefs.isKey("b0"); // 检查是否存在校准数据
-  uint32_t base[4];
-  uint32_t perM[4];
-  for (int i = 0; i < 4; i++) {
-    char bKey[4], pKey[4];
-    sprintf(bKey, "b%d", i);
-    sprintf(pKey, "p%d", i);
-    base[i] = prefs.getUInt(bKey, CableTester::DEFAULT_BASE_CYCLES);
-    perM[i] = prefs.getUInt(pKey, CableTester::DEFAULT_CYCLES_PER_M);
-  }
-  useFeet = prefs.getBool("useFeet", true); // 读取单位偏好
-  soundOn = prefs.getBool("soundOn", true);
-  prefs.end();
-  
-  tester.setCalibrationData(base, perM);
-  printf("Loaded Calib: 4-Pair OK, useFeet=%d, sound=%d, isCalib=%d\n", useFeet, soundOn, isCalibrated);
-}
-
-void saveCalibration(const uint32_t base[4], const uint32_t perM[4]) {
-  prefs.begin("cable_test", false); // 读写模式
-  for (int i = 0; i < 4; i++) {
-    char bKey[4], pKey[4];
-    sprintf(bKey, "b%d", i);
-    sprintf(pKey, "p%d", i);
-    prefs.putUInt(bKey, base[i]);
-    prefs.putUInt(pKey, perM[i]);
-  }
-  prefs.end();
-
-  isCalibrated = true;
-  tester.setCalibrationData(base, perM);
-  printf("Saved Calibration for 4 pairs\n");
-}
-
-void loadHistory() {
-  prefs.begin("cable_history", true);
-  historyCount = prefs.getInt("hCount", 0);
-  if (historyCount > 0 && historyCount <= MAX_HISTORY) {
-    prefs.getBytes("hLogs", historyLogs, sizeof(historyLogs));
-  } else {
-    historyCount = 0;
-  }
-  prefs.end();
-  printf("Loaded %d history records from Flash.\n", historyCount);
-}
-
-void saveHistoryToFlash() {
-  prefs.begin("cable_history", false);
-  prefs.putInt("hCount", historyCount);
-  prefs.putBytes("hLogs", historyLogs, sizeof(historyLogs));
-  prefs.end();
-  printf("Saved history to Flash.\n");
-}
-
-// 使用完全相同的测量序列和状态机，提取电容周期数，消除“连续读”和“跳读”造成的介质极化差异
-void sampleCapacitance(uint32_t results[4]) {
-  // 1. 介质预热 (Dielectric Warm-up)
-  // 连续测线时，电缆一直处于被高频脉冲轰击的状态（极化饱和）。
-  // 校准时，电缆是“冷”的。为了让校准数据与连续测线的数据完美吻合，必须先空跑几圈预热电缆！
-  // 应用户要求，延长一倍预热时间以确保绝缘介质彻底极化
-  for (int i = 0; i < CALIB_PREWARM_LOOPS; i++) {
-    tester.runTest();
-    delay(CALIB_PREWARM_DELAY_MS);
-  }
-
-  // 2. 正式采集 (取 16 次平均)
-  // 应用户要求，增加采样次数以获得更极致的平滑效果
-  for (int i = 0; i < 4; i++)
-    results[i] = 0;
-  for (int i = 0; i < CALIB_SAMPLES; i++) {
-    CableStatus s = tester.runTest();
-    results[0] += s.cycles1;
-    results[1] += s.cycles2;
-    results[2] += s.cycles3;
-    results[3] += s.cycles4;
-    delay(CALIB_SAMPLE_DELAY_MS); // 模拟主循环的间隔
-  }
-  for (int i = 0; i < 4; i++)
-    results[i] /= CALIB_SAMPLES;
-}
-
-void buttonTask(void *pvParameters) {
-  static uint32_t pressStart = 0;
-  static uint32_t releaseTime = 0;
-  static bool isPressed = false;
-  static int clickCount = 0;
-  static bool longPressFired = false;
-
-  while (1) {
-    bool btnIsPressed = (digitalRead(BOOT_BTN_PIN) == LOW);
-
-    if (btnIsPressed && !isPressed) {
-      pressStart = millis();
-      isPressed = true;
-      longPressFired = false;
-      lastActivityTime = millis();
-    } else if (!btnIsPressed && isPressed) {
-      isPressed = false;
-      if (!longPressFired) {
-        clickCount++;
-        releaseTime = millis();
-      }
-    } else if (btnIsPressed && isPressed) {
-      if (!longPressFired && (millis() - pressStart >= BOOT_LONG_PRESS_MS)) {
-        flagLongPress = true;
-        longPressFired = true;
-        clickCount = 0;
-      }
-    } else if (!btnIsPressed && !isPressed) {
-      if (clickCount > 0 &&
-          (millis() - releaseTime > BTN_DOUBLE_CLICK_TIMEOUT_MS)) {
-        if (clickCount == 1) {
-          flagSingleClick = true;
-          printf("Button: Single Click\n");
-        } else if (clickCount >= 2) {
-          flagDoubleClick = true;
-          printf("Button: Double Click\n");
-        }
-        clickCount = 0;
-      }
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(BTN_POLL_INTERVAL_MS)); // 轮询一次按键
-  }
-}
+void handleNormalState();
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
-
-  // 注意：必须放在 Core 1！如果放在 Core 0，会导致 Core 0 的 digitalRead 和
-  // Core 1 的寄存器直读 在极小概率下发生 APB 总线竞争（Bus Contention），导致
-  // Core 1 测得的 CPU 周期数突然多出 85 个周期（约 0.2 米的误差波动）。
-  xTaskCreatePinnedToCore(buttonTask, "BtnTask", 2048, NULL, 1, NULL, 1);
-
+  ButtonHandler::init();
   tester.init();
   display.init();
 
-  loadCalibration();
-  loadHistory();
+  appConfig.loadAll(tester);
 
-  if (!isCalibrated) {
+  if (!appConfig.isCalibrated) {
     appState = STATE_UNCALIBRATED_WARNING;
     warningStartTime = millis();
     display.renderUncalibratedWarning(UNCALIBRATED_WARNING_TIMEOUT_MS / 1000);
@@ -319,208 +54,184 @@ void setup() {
     display.renderReady();
     delay(1000);
   }
-  lastActivityTime = millis();
 }
 
 void handleNormalState() {
   CableStatus currentStatus = tester.runTest();
 
-  // 为了防止拔插瞬间的针脚接触不良导致读取到乱码状态，
-  // 我们采用“稳定防抖保存”策略：只要一个状态连续稳定 3 次（约 1.2
-  // 秒），且不是空载，就自动保存！
-  static CableStatus stableStatus;
+  // 1. 如果连续多次检测到状态没有发生实质性改变，说明电缆接触稳定了
+  static CableStatus debouncedStatus;
   static int stableCount = 0;
-  static CableStatus lastSavedStatus;
-  static bool hasSavedInitial = false;
 
-  if (!hasSavedInitial) {
-    lastSavedStatus = currentStatus; // 避免开机立刻把默认状态存进去
-    hasSavedInitial = true;
-  }
-
-  if (isStatusEqual(currentStatus, stableStatus)) {
+  if (CableTester::isStatusEqual(currentStatus, debouncedStatus)) {
     stableCount++;
-    if (stableCount == STABLE_READING_COUNT) {
-      // 稳定了 3
-      // 个周期，且包含实际物理长度（>0.5m），且跟上一次保存的记录不同，就存入历史
-      // 这样就完美过滤掉了全 PASS 的测试头（长度为 0）以及空载的端口
-      if (hasActualLength(currentStatus) &&
-          !isStatusEqual(currentStatus, lastSavedStatus)) {
-        if (historyCount < MAX_HISTORY) {
-          for (int i = historyCount; i > 0; i--)
-            historyLogs[i] = historyLogs[i - 1];
-          historyLogs[0] = currentStatus;
-          historyCount++;
-        } else {
-          for (int i = MAX_HISTORY - 1; i > 0; i--)
-            historyLogs[i] = historyLogs[i - 1];
-          historyLogs[0] = currentStatus;
-        }
-        saveHistoryToFlash();
-        lastSavedStatus = currentStatus;
-        printf("Auto-saved stable cable to history!\n");
-      }
-    }
   } else {
-    stableStatus = currentStatus;
-    stableCount = 1;
+    stableCount = 0;
+    debouncedStatus = currentStatus;
   }
 
-  // 屏幕显示依然是实时刷新，保证 UI 响应快
-  if (isFirstRun || !isStatusEqual(currentStatus, lastStatus)) {
-    display.renderResult(currentStatus, useFeet, isCalibrated);
-    lastStatus = currentStatus;
+  // 2. 状态稳定并且不是“没插线”的空载状态，我们才需要刷新 UI 和保存历史
+  if (stableCount == STABLE_READING_COUNT) {
+    if (!CableTester::isNoCable(currentStatus)) {
+      display.renderResult(currentStatus, appConfig.useFeet, appConfig.isCalibrated);
+
+      // 只将有意义的测量结果（测到了具体长度，或者有短路故障）保存到历史记录
+      if (CableTester::hasActualLength(currentStatus) || currentStatus.hasFault) {
+        if (!CableTester::isStatusEqual(currentStatus, lastStatus)) {
+          lastStatus = currentStatus;
+          appConfig.addHistory(currentStatus);
+        }
+      }
+    } else {
+      display.renderReady();
+    }
+  }
+
+  // 如果这是开机后第一次运行，我们立即显示当前状态，不等待防抖
+  if (isFirstRun) {
+    if (!CableTester::isNoCable(currentStatus)) {
+      display.renderResult(currentStatus, appConfig.useFeet, appConfig.isCalibrated);
+    } else {
+      display.renderReady();
+    }
     isFirstRun = false;
-    lastActivityTime = millis();
   }
 }
 
 void loop() {
-  bool singleClick = flagSingleClick;
-  flagSingleClick = false;
-  bool doubleClick = flagDoubleClick;
-  flagDoubleClick = false;
-  bool longPress = flagLongPress;
-  flagLongPress = false;
+  ButtonEvent btnEvt = ButtonHandler::getEvent();
+  bool singleClick = (btnEvt == BTN_EVENT_SINGLE_CLICK);
+  bool doubleClick = (btnEvt == BTN_EVENT_DOUBLE_CLICK);
+  bool longPress   = (btnEvt == BTN_EVENT_LONG_PRESS);
+
+  // 检查是否空闲过长导致进入睡眠
+  if (appState != STATE_UNCALIBRATED_WARNING) {
+    if (ButtonHandler::isIdleTimeout(SLEEP_TIMEOUT_MINUTES)) {
+      display.renderMessage("Sleeping...");
+      delay(2000);
+      display.sleep();
+      esp_deep_sleep_start();
+    }
+  }
 
   if (appState == STATE_UNCALIBRATED_WARNING) {
-    if (millis() - warningStartTime >= UNCALIBRATED_WARNING_TIMEOUT_MS) {
-      appState = STATE_NORMAL;
-      isFirstRun = true;
-      printf("Skipped calibration warning (timeout).\n");
-    }
-  }
+    uint32_t elapsed = millis() - warningStartTime;
+    uint32_t remain = (UNCALIBRATED_WARNING_TIMEOUT_MS > elapsed)
+                          ? (UNCALIBRATED_WARNING_TIMEOUT_MS - elapsed) / 1000
+                          : 0;
 
-  if (singleClick || doubleClick || longPress) {
-    if (appState == STATE_UNCALIBRATED_WARNING) {
-      if (longPress) {
+    display.renderUncalibratedWarning(remain);
+
+    if (elapsed > UNCALIBRATED_WARNING_TIMEOUT_MS || btnEvt != BTN_EVENT_NONE) {
+      if (btnEvt != BTN_EVENT_NONE) ButtonHandler::resetActivityTimer();
+      appState = STATE_NORMAL;
+      display.renderReady();
+      delay(500); // 避免按键穿透
+      isFirstRun = true;
+    }
+  } else if (appState == STATE_NORMAL) {
+    if (longPress) {
+      appState = STATE_SETTINGS;
+      menuIndex = 0;
+      isFirstRun = true;
+    }
+  } else if (appState == STATE_SETTINGS) {
+    if (singleClick) {
+      menuIndex = (menuIndex + 1) % 6;
+      display.renderSettings(menuIndex, appConfig.useFeet, appConfig.soundOn);
+    } else if (doubleClick) {
+      if (menuIndex == 0) {
+        if (appConfig.historyCount > 0) {
+          appState = STATE_HISTORY_VIEW;
+          appConfig.historyIndex = 0;
+          display.renderHistory(appConfig.historyLogs[appConfig.historyIndex], appConfig.useFeet, appConfig.historyIndex, appConfig.historyCount);
+        } else {
+          display.renderMessage("No History!");
+          delay(1000);
+          display.renderSettings(menuIndex, appConfig.useFeet, appConfig.soundOn);
+        }
+      } else if (menuIndex == 1) {
+        appConfig.clearHistory();
+        printf("History Cleared!\n");
+        display.renderMessage("History Cleared!");
+        delay(1000);
+        display.renderSettings(menuIndex, appConfig.useFeet, appConfig.soundOn);
+      } else if (menuIndex == 2) {
+        appConfig.toggleUnit();
+        display.renderSettings(menuIndex, appConfig.useFeet, appConfig.soundOn);
+      } else if (menuIndex == 3) {
+        appConfig.toggleSound();
+        display.renderSettings(menuIndex, appConfig.useFeet, appConfig.soundOn);
+      } else if (menuIndex == 4) {
         appState = STATE_CALIB_WAIT_EMPTY;
         display.renderCalibStep1();
-      } else if (singleClick) {
+      } else if (menuIndex == 5) {
         appState = STATE_NORMAL;
         isFirstRun = true;
       }
-    } else if (appState == STATE_NORMAL) {
-      if (longPress) {
-        appState = STATE_SETTINGS;
-        menuIndex = 0;
-        isFirstRun = true;
-      }
-    } else if (appState == STATE_SETTINGS) {
-      if (singleClick) {
-        menuIndex = (menuIndex + 1) % 6;
-        display.renderSettings(menuIndex, useFeet, soundOn);
-      } else if (doubleClick) {
-        if (menuIndex == 0) {
-          if (historyCount > 0) {
-            appState = STATE_HISTORY_VIEW;
-            historyIndex = 0;
-            display.renderHistory(historyLogs[historyIndex], useFeet,
-                                  historyIndex, historyCount);
-          } else {
-            display.renderMessage("No History!");
-            delay(1000);
-            display.renderSettings(menuIndex, useFeet, soundOn);
-          }
-        } else if (menuIndex == 1) {
-          historyCount = 0;
-          historyIndex = 0;
-          saveHistoryToFlash();
-          printf("History Cleared!\n");
-          display.renderMessage("History Cleared!");
-          delay(1000);
-          display.renderSettings(menuIndex, useFeet, soundOn);
-        } else if (menuIndex == 2) {
-          useFeet = !useFeet;
-          prefs.begin("cable_test", false);
-          prefs.putBool("useFeet", useFeet);
-          prefs.end();
-          display.renderSettings(menuIndex, useFeet, soundOn);
-        } else if (menuIndex == 3) {
-          soundOn = !soundOn;
-          prefs.begin("cable_test", false);
-          prefs.putBool("soundOn", soundOn);
-          prefs.end();
-          display.renderSettings(menuIndex, useFeet, soundOn);
-        } else if (menuIndex == 4) {
-          appState = STATE_CALIB_WAIT_EMPTY;
-          display.renderCalibStep1();
-        } else if (menuIndex == 5) {
-          appState = STATE_NORMAL;
-          isFirstRun = true;
-        }
-      } else if (longPress) {
-        appState = STATE_NORMAL;
-        isFirstRun = true;
-      }
-    } else if (appState == STATE_HISTORY_VIEW) {
-      if (singleClick) {
-        historyIndex = (historyIndex + 1) % historyCount;
-        display.renderHistory(historyLogs[historyIndex], useFeet, historyIndex,
-                              historyCount);
-      } else if (doubleClick || longPress) {
-        appState = STATE_NORMAL;
-        isFirstRun = true;
-      }
-    } else if (appState == STATE_CALIB_WAIT_EMPTY) {
-      if (singleClick) {
-        CableStatus s = tester.runTest();
-        if (!isAllOpen(s)) {
-          display.renderCalibError("Short Detected!", "Insert EMPTY plug.");
-          delay(2000);
-          display.renderCalibStep1();
-        } else {
-          display.renderMeasuring();
-          delay(100);
-          sampleCapacitance(tempBaseCycles);
-          appState = STATE_CALIB_WAIT_76INCH;
-          display.renderCalibStep2();
-        }
-      }
-    } else if (appState == STATE_CALIB_WAIT_76INCH) {
-      if (singleClick) {
-        display.renderMeasuring();
-        delay(100);
-        uint32_t testCycles[4];
-        sampleCapacitance(testCycles);
+    } else if (longPress) {
+      appState = STATE_NORMAL;
+      isFirstRun = true;
+    }
+  } else if (appState == STATE_HISTORY_VIEW) {
+    if (singleClick) {
+      appConfig.historyIndex = (appConfig.historyIndex + 1) % appConfig.historyCount;
+      display.renderHistory(appConfig.historyLogs[appConfig.historyIndex], appConfig.useFeet, appConfig.historyIndex, appConfig.historyCount);
+    } else if (longPress || doubleClick) {
+      appState = STATE_NORMAL;
+      isFirstRun = true;
+    }
+  } else if (appState == STATE_CALIB_WAIT_EMPTY) {
+    if (singleClick || doubleClick || longPress) {
+      display.renderMessage("Sampling...");
+      tester.runCalibrationSample(tempBaseCycles);
+      printf("Calib Step 1 done: base = %u, %u, %u, %u\n", tempBaseCycles[0],
+             tempBaseCycles[1], tempBaseCycles[2], tempBaseCycles[3]);
 
-        bool valid = true;
-        uint32_t cyclesPerM[4];
-        for (int i = 0; i < 4; i++) {
-          if (testCycles[i] <= tempBaseCycles[i]) {
-            valid = false;
-            break;
-          }
-          uint32_t delta = testCycles[i] - tempBaseCycles[i];
-          cyclesPerM[i] =
-              (uint32_t)(delta / CableTester::CALIBRATION_CABLE_LENGTH_M);
-        }
+      appState = STATE_CALIB_WAIT_76INCH;
+      display.renderCalibStep2();
+    }
+  } else if (appState == STATE_CALIB_WAIT_76INCH) {
+    if (singleClick || doubleClick || longPress) {
+      display.renderMessage("Sampling...");
+      uint32_t step2Cycles[4];
+      tester.runCalibrationSample(step2Cycles);
 
-        if (valid) {
-          saveCalibration(tempBaseCycles, cyclesPerM);
-          display.renderCalibDone();
-        } else {
-          display.renderCalibFailed();
+      uint32_t perM[4];
+      bool ok = true;
+      for (int i = 0; i < 4; i++) {
+        if (step2Cycles[i] <= tempBaseCycles[i]) {
+          ok = false;
+          break;
         }
-        delay(2000);
+        float diff = step2Cycles[i] - tempBaseCycles[i];
+        perM[i] = (uint32_t)(diff / 1.9304f); // 76 inches = 1.9304 meters
+      }
+
+      if (ok) {
+        appConfig.saveCalibration(tempBaseCycles, perM, tester);
+        display.renderCalibDone();
+        delay(1000);
+        appState = STATE_NORMAL;
+        isFirstRun = true;
+      } else {
+        display.renderCalibError("Invalid Cable!", "Cap < Base");
+        delay(3000);
         appState = STATE_NORMAL;
         isFirstRun = true;
       }
     }
   }
 
+  // 只有在 NORMAL 状态下，主循环才会去不断测试电缆并刷新屏幕
   if (appState == STATE_NORMAL) {
     handleNormalState();
-  } else if (appState == STATE_SETTINGS && isFirstRun) {
-    display.renderSettings(menuIndex, useFeet, soundOn);
-    isFirstRun = false;
   }
 
-  if (millis() - lastActivityTime > SLEEP_TIMEOUT_MINUTES * 60 * 1000UL) {
-    printf("Inactivity timeout. Entering deep sleep...\n");
-    display.sleep();
-    delay(100);
-    esp_deep_sleep_start();
+  // 渲染设置菜单的初次绘制
+  if (appState == STATE_SETTINGS && isFirstRun) {
+    display.renderSettings(menuIndex, appConfig.useFeet, appConfig.soundOn);
+    isFirstRun = false;
   }
 
   delay(MAIN_LOOP_DELAY_MS);
