@@ -35,6 +35,9 @@ public:
     // 未校准提示界面
     void renderUncalibratedWarning(uint32_t timeoutSec);
 
+    // 关闭屏幕电源进入休眠
+    void sleep();
+
 private:
     // 使用 U8g2 库定义的 I2C 128x64 OLED 对象（ESP32 硬件 I2C）
     U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;

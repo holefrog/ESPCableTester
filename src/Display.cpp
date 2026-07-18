@@ -188,3 +188,9 @@ void Display::renderUncalibratedWarning(uint32_t timeoutSec) {
     
     u8g2.sendBuffer();
 }
+
+void Display::sleep() {
+    u8g2.clearBuffer();
+    u8g2.sendBuffer();
+    u8g2.setPowerSave(1); // Turn off display to save power
+}

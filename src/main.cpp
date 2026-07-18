@@ -11,6 +11,7 @@ Preferences prefs;
 // 状态缓存
 CableStatus lastStatus;
 bool isFirstRun = true;
+uint32_t lastActivityTime = 0;
 
 // 校准状态机
 enum AppState {
@@ -142,6 +143,7 @@ void setup() {
         display.renderReady();
         delay(1000); 
     }
+    lastActivityTime = millis();
 }
 
 void handleNormalState() {
@@ -151,6 +153,7 @@ void handleNormalState() {
         display.renderResult(currentStatus, useFeet, isCalibrated);
         lastStatus = currentStatus;
         isFirstRun = false;
+        lastActivityTime = millis();
     }
 }
 
@@ -160,6 +163,7 @@ void loop() {
     
     if (btnIsPressed && !btnWasPressed) {
         btnPressStart = millis();
+        lastActivityTime = millis();
     }
     
     // 优先处理超时逻辑
@@ -265,6 +269,14 @@ void loop() {
     // 只有在 NORMAL 状态下才跑正常的测线逻辑
     if (appState == STATE_NORMAL) {
         handleNormalState();
+    }
+    
+    // 自动休眠判断 (1分钟无操作/无状态改变)
+    if (millis() - lastActivityTime > 60000) {
+        Serial.println("Inactivity timeout. Entering deep sleep...");
+        display.sleep();
+        delay(100);
+        esp_deep_sleep_start();
     }
     
     delay(50); // 主循环略微减速，让按键手感好点
