@@ -83,9 +83,19 @@ public:
     // [建议值: 10] 10 次 10ms 刚好凑够 100 毫秒的整周期积分时间
     static constexpr int PHASE_LOCK_SAMPLES = 10;
 
-    // 设置校准数据（由外层通过 Preferences 加载后注入）
-    void setCalibrationData(const uint32_t base[4], const uint32_t perMeter[4]);
+    // 获取并设置校准数据
+    void setCalibrationData(const uint32_t base[4], const uint32_t perM[4]);
+    void getCalibrationData(uint32_t base[4], uint32_t perM[4]) const;
     
+    // 执行多次采样求平均（用于校准），以消除极化差异
+    void runCalibrationSample(uint32_t results[4]);
+
+    // 辅助函数
+    static bool isStatusEqual(const CableStatus &a, const CableStatus &b);
+    static bool isAllOpen(const CableStatus &status);
+    static bool isNoCable(const CableStatus &status);
+    static bool hasActualLength(const CableStatus &status);
+
     // 获取/进行单次电容测量，用于校准模式（求平均值需要多次测量）
     uint32_t measureCapacitanceCycles(uint8_t txPin, uint8_t rxPin);
 

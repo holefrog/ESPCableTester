@@ -413,3 +413,89 @@ void CableTester::detectFullWiremap(uint8_t shortNets[8]) {
     pinMode(PINS[i], INPUT_PULLDOWN);
   }
 }
+
+// 辅助函数：比对前后两次状态是否发生实质性变化（包括长度变化 > 0.2m）
+bool CableTester::isStatusEqual(const CableStatus &a, const CableStatus &b) {
+  const float LENGTH_CHANGE_THRESHOLD_M = 0.2f;
+  if (a.pair1 != b.pair1 || a.pair2 != b.pair2 || a.pair3 != b.pair3 ||
+      a.pair4 != b.pair4)
+    return false;
+  if (a.shortWire1 != b.shortWire1 || a.shortWire2 != b.shortWire2 ||
+      a.shortWire3 != b.shortWire3 || a.shortWire4 != b.shortWire4)
+    return false;
+
+  auto checkLen = [](TestResult res, float l1, float l2) {
+    if (res == TestResult::OPEN) {
+      if (abs(l1 - l2) > LENGTH_CHANGE_THRESHOLD_M)
+        return false;
+    }
+    return true;
+  };
+
+  if (!checkLen(a.pair1, a.len1, b.len1)) return false;
+  if (!checkLen(a.pair2, a.len2, b.len2)) return false;
+  if (!checkLen(a.pair3, a.len3, b.len3)) return false;
+  if (!checkLen(a.pair4, a.len4, b.len4)) return false;
+
+  if (a.hasFault != b.hasFault)
+    return false;
+  for (int i = 0; i < 8; i++) {
+    if (a.shortNets[i] != b.shortNets[i])
+      return false;
+  }
+  return true;
+}
+
+// 辅助函数：判断是否空载（所有线都是 OPEN，且长度都接近 0）
+bool CableTester::isAllOpen(const CableStatus &status) {
+  return (status.pair1 == TestResult::OPEN &&
+          status.pair2 == TestResult::OPEN &&
+          status.pair3 == TestResult::OPEN && status.pair4 == TestResult::OPEN);
+}
+
+// 辅助函数：判断是否真的没插线（全断且长度小于 0.5m）
+bool CableTester::isNoCable(const CableStatus &status) {
+  const float NO_CABLE_LENGTH_THRESHOLD_M = 0.5f;
+  if (!isAllOpen(status))
+    return false;
+  float maxL = 0;
+  if (status.len1 > maxL) maxL = status.len1;
+  if (status.len2 > maxL) maxL = status.len2;
+  if (status.len3 > maxL) maxL = status.len3;
+  if (status.len4 > maxL) maxL = status.len4;
+  return (maxL < NO_CABLE_LENGTH_THRESHOLD_M);
+}
+
+// 辅助函数：判断该状态是否包含有效的“实际长度”
+bool CableTester::hasActualLength(const CableStatus &status) {
+  const float NO_CABLE_LENGTH_THRESHOLD_M = 0.5f;
+  float maxL = 0;
+  if (status.pair1 == TestResult::OPEN && status.len1 > maxL) maxL = status.len1;
+  if (status.pair2 == TestResult::OPEN && status.len2 > maxL) maxL = status.len2;
+  if (status.pair3 == TestResult::OPEN && status.len3 > maxL) maxL = status.len3;
+  if (status.pair4 == TestResult::OPEN && status.len4 > maxL) maxL = status.len4;
+  return (maxL >= NO_CABLE_LENGTH_THRESHOLD_M);
+}
+
+void CableTester::runCalibrationSample(uint32_t results[4]) {
+  const int CALIB_PREWARM_LOOPS = 10;
+  const uint32_t CALIB_PREWARM_DELAY_MS = 50;
+  const int CALIB_SAMPLES = 16;
+  const uint32_t CALIB_SAMPLE_DELAY_MS = 50;
+
+  for (int i = 0; i < CALIB_PREWARM_LOOPS; i++) {
+    runTest();
+    delay(CALIB_PREWARM_DELAY_MS);
+  }
+
+  for (int i = 0; i < 4; i++) results[i] = 0;
+  for (int i = 0; i < CALIB_SAMPLES; i++) {
+    CableStatus s = runTest();
+    results[0] += s.cycles1;
+    results[1] += s.cycles2;
+    results[2] += s.cycles3;
+    results[3] += s.cycles4;
+    delay(CALIB_SAMPLE_DELAY_MS); 
+  }
+  for (int i = 0; i < 4; i++) results[i] /= CALIB_SAMPLES;
+}
