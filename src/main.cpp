@@ -178,8 +178,7 @@ void loadCalibration() {
   prefs.end();
 
   tester.setCalibrationData(base, perM);
-  Serial.printf("Loaded Calib: 4-Pair OK, useFeet=%d, isCalib=%d\n", useFeet,
-                isCalibrated);
+  printf("Loaded Calib: 4-Pair OK, useFeet=%d, isCalib=%d\n", useFeet, isCalibrated);
 }
 
 void saveCalibration(const uint32_t base[4], const uint32_t perM[4]) {
@@ -195,7 +194,7 @@ void saveCalibration(const uint32_t base[4], const uint32_t perM[4]) {
 
   isCalibrated = true;
   tester.setCalibrationData(base, perM);
-  Serial.printf("Saved Calibration for 4 pairs\n");
+  printf("Saved Calibration for 4 pairs\n");
 }
 
 void loadHistory() {
@@ -207,7 +206,7 @@ void loadHistory() {
     historyCount = 0;
   }
   prefs.end();
-  Serial.printf("Loaded %d history records from Flash.\n", historyCount);
+  printf("Loaded %d history records from Flash.\n", historyCount);
 }
 
 void saveHistoryToFlash() {
@@ -215,7 +214,7 @@ void saveHistoryToFlash() {
   prefs.putInt("hCount", historyCount);
   prefs.putBytes("hLogs", historyLogs, sizeof(historyLogs));
   prefs.end();
-  Serial.println("Saved history to Flash.");
+  printf("Saved history to Flash.\n");
 }
 
 // 使用完全相同的测量序列和状态机，提取电容周期数，消除“连续读”和“跳读”造成的介质极化差异
@@ -276,10 +275,10 @@ void buttonTask(void *pvParameters) {
       if (clickCount > 0 && (millis() - releaseTime > BTN_DOUBLE_CLICK_TIMEOUT_MS)) {
         if (clickCount == 1) {
           flagSingleClick = true;
-          Serial.println("Button: Single Click");
+          printf("Button: Single Click\n");
         } else if (clickCount >= 2) {
           flagDoubleClick = true;
-          Serial.println("Button: Double Click");
+          printf("Button: Double Click\n");
         }
         clickCount = 0;
       }
@@ -354,7 +353,7 @@ void handleNormalState() {
         }
         saveHistoryToFlash();
         lastSavedStatus = currentStatus;
-        Serial.println("Auto-saved stable cable to history!");
+        printf("Auto-saved stable cable to history!\n");
       }
     }
   } else {
@@ -383,7 +382,7 @@ void loop() {
     if (millis() - warningStartTime >= UNCALIBRATED_WARNING_TIMEOUT_MS) {
       appState = STATE_NORMAL;
       isFirstRun = true;
-      Serial.println("Skipped calibration warning (timeout).");
+      printf("Skipped calibration warning (timeout).\n");
     }
   }
 
@@ -479,7 +478,7 @@ void loop() {
   }
 
   if (millis() - lastActivityTime > SLEEP_TIMEOUT_MINUTES * 60 * 1000UL) {
-    Serial.println("Inactivity timeout. Entering deep sleep...");
+    printf("Inactivity timeout. Entering deep sleep...\n");
     display.sleep();
     delay(100);
     esp_deep_sleep_start();

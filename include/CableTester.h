@@ -87,7 +87,7 @@ public:
     void setCalibrationData(const uint32_t base[4], const uint32_t perMeter[4]);
     
     // 获取/进行单次电容测量，用于校准模式（求平均值需要多次测量）
-    uint32_t IRAM_ATTR measureCapacitanceCycles(uint8_t txPin, uint8_t rxPin);
+    uint32_t measureCapacitanceCycles(uint8_t txPin, uint8_t rxPin);
 
 private:
     // 测试具体的某一个线对
