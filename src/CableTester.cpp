@@ -74,12 +74,12 @@ uint32_t IRAM_ATTR CableTester::measureCapacitanceCycles(uint8_t txPin,
   // 寄存器，实现真正的零抖动 1 周期轮询！
   uint32_t pin_mask = (1 << (rxPin & 31));
   if (rxPin < 32) {
-    while ((REG_READ(GPIO_IN_REG) & pin_mask) == 0) {
+    while (((*(volatile uint32_t *)(GPIO_IN_REG)) & pin_mask) == 0) {
       if (ESP.getCycleCount() - start > max_cycles)
         break;
     }
   } else {
-    while ((REG_READ(GPIO_IN1_REG) & pin_mask) == 0) {
+    while (((*(volatile uint32_t *)(GPIO_IN1_REG)) & pin_mask) == 0) {
       if (ESP.getCycleCount() - start > max_cycles)
         break;
     }
