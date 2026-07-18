@@ -64,12 +64,33 @@ bool isStatusEqual(const CableStatus& a, const CableStatus& b) {
     return true;
 }
 
-// 辅助函数：判断是否空载（考虑到长度）
+// 辅助函数：判断是否空载（所有线都是 OPEN，且长度都接近 0）
 bool isAllOpen(const CableStatus& status) {
     return (status.pair1 == TestResult::OPEN && 
             status.pair2 == TestResult::OPEN && 
             status.pair3 == TestResult::OPEN && 
             status.pair4 == TestResult::OPEN);
+}
+
+// 辅助函数：判断是否真的没插线（全断且长度小于 0.5m）
+bool isNoCable(const CableStatus& status) {
+    if (!isAllOpen(status)) return false;
+    float maxL = 0;
+    if (status.len1 > maxL) maxL = status.len1;
+    if (status.len2 > maxL) maxL = status.len2;
+    if (status.len3 > maxL) maxL = status.len3;
+    if (status.len4 > maxL) maxL = status.len4;
+    return (maxL < 0.5f);
+}
+
+// 辅助函数：判断该状态是否包含有效的“实际长度”
+bool hasActualLength(const CableStatus& status) {
+    float maxL = 0;
+    if (status.pair1 == TestResult::OPEN && status.len1 > maxL) maxL = status.len1;
+    if (status.pair2 == TestResult::OPEN && status.len2 > maxL) maxL = status.len2;
+    if (status.pair3 == TestResult::OPEN && status.len3 > maxL) maxL = status.len3;
+    if (status.pair4 == TestResult::OPEN && status.len4 > maxL) maxL = status.len4;
+    return (maxL >= 0.5f);
 }
 
 void loadCalibration() {
@@ -105,6 +126,26 @@ void saveCalibration(const uint32_t base[4], const uint32_t perM[4]) {
     isCalibrated = true;
     tester.setCalibrationData(base, perM);
     Serial.printf("Saved Calibration for 4 pairs\n");
+}
+
+void loadHistory() {
+    prefs.begin("cable_history", true);
+    historyCount = prefs.getInt("hCount", 0);
+    if (historyCount > 0 && historyCount <= MAX_HISTORY) {
+        prefs.getBytes("hLogs", historyLogs, sizeof(historyLogs));
+    } else {
+        historyCount = 0;
+    }
+    prefs.end();
+    Serial.printf("Loaded %d history records from Flash.\n", historyCount);
+}
+
+void saveHistoryToFlash() {
+    prefs.begin("cable_history", false);
+    prefs.putInt("hCount", historyCount);
+    prefs.putBytes("hLogs", historyLogs, sizeof(historyLogs));
+    prefs.end();
+    Serial.println("Saved history to Flash.");
 }
 
 // 使用完全相同的测量序列和状态机，提取电容周期数，消除“连续读”和“跳读”造成的介质极化差异
@@ -187,13 +228,14 @@ void setup() {
     
     pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
     
-    // 启动独立任务处理按键，防止被耗时的测量逻辑阻塞
-    xTaskCreatePinnedToCore(buttonTask, "BtnTask", 2048, NULL, 1, NULL, 1);
+    // 启动独立任务处理按键，分配到 Core 0，实现物理级别的完全隔离
+    xTaskCreatePinnedToCore(buttonTask, "BtnTask", 2048, NULL, 1, NULL, 0);
     
     tester.init();
     display.init();
     
     loadCalibration();
+    loadHistory();
     
     if (!isCalibrated) {
         appState = STATE_UNCALIBRATED_WARNING;
@@ -210,22 +252,45 @@ void setup() {
 void handleNormalState() {
     CableStatus currentStatus = tester.runTest();
     
+    // 为了防止拔插瞬间的针脚接触不良导致读取到乱码状态，
+    // 我们采用“稳定防抖保存”策略：只要一个状态连续稳定 3 次（约 1.2 秒），且不是空载，就自动保存！
+    static CableStatus stableStatus;
+    static int stableCount = 0;
+    static CableStatus lastSavedStatus;
+    static bool hasSavedInitial = false;
+    
+    if (!hasSavedInitial) {
+        lastSavedStatus = currentStatus; // 避免开机立刻把默认状态存进去
+        hasSavedInitial = true;
+    }
+    
+    if (isStatusEqual(currentStatus, stableStatus)) {
+        stableCount++;
+        if (stableCount == 3) {
+            // 稳定了 3 个周期，且包含实际物理长度（>0.5m），且跟上一次保存的记录不同，就存入历史
+            // 这样就完美过滤掉了全 PASS 的测试头（长度为 0）以及空载的端口
+            if (hasActualLength(currentStatus) && !isStatusEqual(currentStatus, lastSavedStatus)) {
+                if (historyCount < MAX_HISTORY) {
+                    for (int i = historyCount; i > 0; i--) historyLogs[i] = historyLogs[i-1];
+                    historyLogs[0] = currentStatus;
+                    historyCount++;
+                } else {
+                    for (int i = MAX_HISTORY - 1; i > 0; i--) historyLogs[i] = historyLogs[i-1];
+                    historyLogs[0] = currentStatus;
+                }
+                saveHistoryToFlash();
+                lastSavedStatus = currentStatus;
+                Serial.println("Auto-saved stable cable to history!");
+            }
+        }
+    } else {
+        stableStatus = currentStatus;
+        stableCount = 1;
+    }
+    
+    // 屏幕显示依然是实时刷新，保证 UI 响应快
     if (isFirstRun || !isStatusEqual(currentStatus, lastStatus)) {
         display.renderResult(currentStatus, useFeet, isCalibrated);
-        
-        // Auto-save logic on unplug
-        if (!isFirstRun && !isAllOpen(lastStatus) && isAllOpen(currentStatus)) {
-            if (historyCount < MAX_HISTORY) {
-                for (int i = historyCount; i > 0; i--) historyLogs[i] = historyLogs[i-1];
-                historyLogs[0] = lastStatus;
-                historyCount++;
-            } else {
-                for (int i = MAX_HISTORY - 1; i > 0; i--) historyLogs[i] = historyLogs[i-1];
-                historyLogs[0] = lastStatus;
-            }
-            Serial.println("Saved to history on unplug.");
-        }
-        
         lastStatus = currentStatus;
         isFirstRun = false;
         lastActivityTime = millis();
