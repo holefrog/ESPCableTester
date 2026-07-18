@@ -57,11 +57,30 @@ public:
     static constexpr const char* CALIBRATION_CABLE_NAME = "76-inch";
 
     // 测试与校准相关常量
+    
+    // 首次开机未经校准时，假设电缆未接（空载）的基准充电周期数
+    // [建议值: 150 ~ 200] 取决于 ESP32 引脚的内部寄生电容大小
     static constexpr uint32_t DEFAULT_BASE_CYCLES = 150;
+    
+    // 首次开机未经校准时，假设电缆每增加1米，电容充电所需增加的周期数
+    // [建议值: 450 ~ 600] 典型 CAT5e/CAT6 网线的值
     static constexpr uint32_t DEFAULT_CYCLES_PER_M = 540;
+    
+    // 如果充电周期超过此值，判定为发生“对地短路”故障（电容无法充满）
+    // [建议值: 15000000 ~ 20000000] 在 240MHz 下，2000万周期约为 83 毫秒
     static constexpr uint32_t TIMEOUT_CYCLES = 20000000;
-    static constexpr uint32_t MAX_POLL_CYCLES = 24000000; // 100ms @ 240MHz
+    
+    // 硬件轮询电容电压升高的最大超时时间
+    // [建议值: 24000000] 在 240MHz 频率下精确等于 100 毫秒，超时则终止死循环
+    static constexpr uint32_t MAX_POLL_CYCLES = 24000000;
+    
+    // 锁相积分采样的死区时间 (10000微秒即 10ms)。
+    // 用于 100% 抵消 50Hz (20ms) 和 60Hz (16.6ms) 市电造成的交流寄生电容干扰
+    // [建议值: 10000] 10ms 是 50Hz 半周期，这是消除市电干扰的完美公约数！
     static constexpr uint32_t PHASE_LOCK_INTERVAL_US = 10000;
+    
+    // 每次单根线段测量的锁相积分采样次数
+    // [建议值: 10] 10 次 10ms 刚好凑够 100 毫秒的整周期积分时间
     static constexpr int PHASE_LOCK_SAMPLES = 10;
 
     // 设置校准数据（由外层通过 Preferences 加载后注入）
