@@ -24,6 +24,12 @@ struct CableStatus {
     float len3;
     float len4;
 
+    // 记录如果发生短路，是和哪个引脚短路的 (0=GND, 1-8=芯号)
+    uint8_t shortWire1;
+    uint8_t shortWire2;
+    uint8_t shortWire3;
+    uint8_t shortWire4;
+
     // 原始周期数（用于精准校准）
     uint32_t cycles1;
     uint32_t cycles2;
@@ -57,7 +63,8 @@ private:
     // 参数 expectedRxPin: 预期收到脉冲的接收引脚
     // 参数 pairIndex: 对应的线对索引 (0-3)
     // 参数 outCycles: 输出该线对的原始充电周期数
-    TestResult testSinglePair(uint8_t txPin, uint8_t expectedRxPin, float& outLength, int pairIndex, uint32_t& outCycles);
+    // 参数 outShortWire: 输出具体的短路引脚 (0=GND, 1-8=芯号)
+    TestResult testSinglePair(uint8_t txPin, uint8_t expectedRxPin, float& outLength, int pairIndex, uint32_t& outCycles, uint8_t& outShortWire);
     
     // 重置所有测试引脚为下拉输入（安全且防止悬空干扰）
     void resetAllPins();

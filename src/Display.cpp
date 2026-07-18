@@ -88,12 +88,18 @@ void Display::renderResult(const CableStatus& status, bool useFeet, bool isCalib
     // 2. 蓝色区域 (底端 48 像素，y: 16~63)
     // ==========================================
     // 辅助闭包函数
-    auto drawLine = [&](int y, const char* label, TestResult res, float len) {
+    auto drawLine = [&](int y, const char* label, TestResult res, float len, uint8_t shortWire) {
         u8g2.setCursor(0, y);
         u8g2.print(label);
         
         char buf[16];
-        if (res == TestResult::OPEN && isCalibrated) {
+        if (res == TestResult::SHORT_OR_CROSS) {
+            if (shortWire == 0) {
+                snprintf(buf, sizeof(buf), "SHT(GND)");
+            } else {
+                snprintf(buf, sizeof(buf), "SHT(%d)", shortWire);
+            }
+        } else if (res == TestResult::OPEN) {
             float displayLen = useFeet ? (len * 3.28084f) : len;
             const char* unit = useFeet ? "ft" : "m";
             snprintf(buf, sizeof(buf), "%.1f%s", displayLen, unit);
@@ -105,10 +111,10 @@ void Display::renderResult(const CableStatus& status, bool useFeet, bool isCalib
     };
     
     // 均分蓝区的 48 像素高度：四根基准线分别放在 27, 39, 51, 63
-    drawLine(27, "1-2 (Org):", status.pair1, status.len1); // 缩写颜色避免越界
-    drawLine(39, "3-6 (Grn):", status.pair2, status.len2);
-    drawLine(51, "4-5 (Blu):", status.pair3, status.len3);
-    drawLine(63, "7-8 (Brn):", status.pair4, status.len4);
+    drawLine(27, "1-2 (Org):", status.pair1, status.len1, status.shortWire1); // 缩写颜色避免越界
+    drawLine(39, "3-6 (Grn):", status.pair2, status.len2, status.shortWire2);
+    drawLine(51, "4-5 (Blu):", status.pair3, status.len3, status.shortWire3);
+    drawLine(63, "7-8 (Brn):", status.pair4, status.len4, status.shortWire4);
     
     u8g2.sendBuffer(); // 将内存缓冲一次性推送到 OLED 进行物理刷新
 }

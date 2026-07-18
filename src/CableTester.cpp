@@ -92,18 +92,28 @@ void CableTester::resetAllPins() {
     }
 }
 
-TestResult CableTester::testSinglePair(uint8_t txPin, uint8_t expectedRxPin, float& outLength, int pairIndex, uint32_t& outCycles) {
+TestResult CableTester::testSinglePair(uint8_t txPin, uint8_t expectedRxPin, float& outLength, int pairIndex, uint32_t& outCycles, uint8_t& outShortWire) {
     outLength = 0.0f;
     outCycles = 0;
+    outShortWire = 255;
     
     // 0. 检查接收引脚是否被意外对地短路 (这会使得电容永远无法充电导致超时)
+    // 关键修复：为了防止交叉短路时其他引脚的下拉电阻产生分压干扰，暂时将所有引脚设为高阻态(INPUT)
+    for (int i = 0; i < 8; i++) {
+        pinMode(PINS[i], INPUT);
+    }
     pinMode(expectedRxPin, INPUT_PULLUP);
     delay(2);
     bool isRxShortedToGnd = (digitalRead(expectedRxPin) == LOW);
-    pinMode(expectedRxPin, INPUT_PULLDOWN); // 测试完立刻恢复
+    
+    // 测试完立刻恢复所有引脚为下拉输入
+    for (int i = 0; i < 8; i++) {
+        pinMode(PINS[i], INPUT_PULLDOWN);
+    }
     
     if (isRxShortedToGnd) {
         Serial.printf("[DEBUG] rxPin=%d is shorted to GROUND!\n", expectedRxPin);
+        outShortWire = 0; // 0 代表对地短路
         return TestResult::SHORT_OR_CROSS;
     }
 
@@ -130,6 +140,12 @@ TestResult CableTester::testSinglePair(uint8_t txPin, uint8_t expectedRxPin, flo
         if (digitalRead(currentPin) == HIGH) {
             Serial.printf("[DEBUG] txPin=%d is HIGH, but unexpected pin=%d is ALSO HIGH!\n", txPin, currentPin);
             hasShort = true;
+            for(int j = 0; j < 8; j++) {
+                if (PINS[j] == currentPin) {
+                    outShortWire = j + 1;
+                    break;
+                }
+            }
             break; // 卫语句：一旦发现一根引脚存在短路，即可跳出循环
         }
     }
@@ -180,20 +196,21 @@ CableStatus CableTester::runTest() {
     CableStatus status;
     status.len1 = 0; status.len2 = 0; status.len3 = 0; status.len4 = 0;
     status.cycles1 = 0; status.cycles2 = 0; status.cycles3 = 0; status.cycles4 = 0;
+    status.shortWire1 = 255; status.shortWire2 = 255; status.shortWire3 = 255; status.shortWire4 = 255;
     
     // 业务目的：远端将线两两短接，近端发送一次脉冲，就可以验证这两根线的回路连通性
     
     // 测试线对 1：Pin 1(橙白) 和 Pin 2(橙)
-    status.pair1 = testSinglePair(13, 14, status.len1, 0, status.cycles1); // Pair 1: 1-2 (橙色对)
+    status.pair1 = testSinglePair(13, 14, status.len1, 0, status.cycles1, status.shortWire1); // Pair 1: 1-2 (橙色对)
     
     // 测试线对 2：Pin 3(绿白) 和 Pin 6(绿)
-    status.pair2 = testSinglePair(25, 32, status.len2, 1, status.cycles2); // Pair 2: 3-6 (绿色对)
+    status.pair2 = testSinglePair(25, 32, status.len2, 1, status.cycles2, status.shortWire2); // Pair 2: 3-6 (绿色对)
     
-    // 测试线对 3：Pin 4(蓝) 和 Pin 5(蓝白)
-    status.pair3 = testSinglePair(26, 27, status.len3, 2, status.cycles3); // Pair 3: 4-5 (蓝色对)
+    // 测试线极 3：Pin 4(蓝) 和 Pin 5(蓝白)
+    status.pair3 = testSinglePair(26, 27, status.len3, 2, status.cycles3, status.shortWire3); // Pair 3: 4-5 (蓝色对)
     
     // 测试线对 4：Pin 7(棕白) 和 Pin 8(棕)
-    status.pair4 = testSinglePair(33, 23, status.len4, 3, status.cycles4); // Pair 4: 7-8 (棕色对)
+    status.pair4 = testSinglePair(33, 23, status.len4, 3, status.cycles4, status.shortWire4); // Pair 4: 7-8 (棕色对)
     
     return status;
 }

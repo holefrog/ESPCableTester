@@ -35,6 +35,7 @@ const int BOOT_BTN_PIN = 0;
 // 辅助函数：比对前后两次状态是否发生实质性变化（包括长度变化 > 0.2m）
 bool isStatusEqual(const CableStatus& a, const CableStatus& b) {
     if (a.pair1 != b.pair1 || a.pair2 != b.pair2 || a.pair3 != b.pair3 || a.pair4 != b.pair4) return false;
+    if (a.shortWire1 != b.shortWire1 || a.shortWire2 != b.shortWire2 || a.shortWire3 != b.shortWire3 || a.shortWire4 != b.shortWire4) return false;
     
     // 如果是断路，检查长度是否有明显变化 (>0.2m 防止数值轻微抖动引起频繁刷屏)
     auto checkLen = [](TestResult res, float l1, float l2) {
