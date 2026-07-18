@@ -19,6 +19,9 @@ public:
     // 参数 useFeet: 是否使用英尺(feet)作为长度单位，false 则使用米(m)
     void renderResult(const CableStatus& status, bool useFeet, bool isCalibrated);
     
+    // 渲染历史记录界面
+    void renderHistory(const CableStatus& status, bool useFeet, int index, int total);
+    
     // 渲染待机或欢迎界面
     void renderReady();
 
@@ -44,6 +47,9 @@ private:
     
     // 将枚举结果转为对应的可读字符串
     const char* statusToStr(TestResult res);
+    
+    // 辅助函数：绘制图形化线序
+    void drawGraphicalWiremap(int yOffset, const CableStatus& status, bool useFeet);
 };
 
 #endif // DISPLAY_H

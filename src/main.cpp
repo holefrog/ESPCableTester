@@ -11,12 +11,22 @@ Preferences prefs;
 // 状态缓存
 CableStatus lastStatus;
 bool isFirstRun = true;
-uint32_t lastActivityTime = 0;
+volatile uint32_t lastActivityTime = 0;
+
+volatile bool flagSingleClick = false;
+volatile bool flagDoubleClick = false;
+volatile bool flagLongPress = false;
+
+const int MAX_HISTORY = 10;
+CableStatus historyLogs[MAX_HISTORY];
+int historyCount = 0;
+int historyIndex = 0;
 
 // 校准状态机
 enum AppState {
     STATE_UNCALIBRATED_WARNING,
     STATE_NORMAL,
+    STATE_HISTORY_VIEW,
     STATE_CALIB_WAIT_EMPTY,
     STATE_CALIB_WAIT_76INCH
 };
@@ -123,11 +133,62 @@ void sampleCapacitance(uint32_t results[4]) {
     for (int i = 0; i < 4; i++) results[i] /= SAMPLES;
 }
 
+void buttonTask(void *pvParameters) {
+    static uint32_t pressStart = 0;
+    static uint32_t releaseTime = 0;
+    static bool isPressed = false;
+    static int clickCount = 0;
+    static bool longPressFired = false;
+    
+    while(1) {
+        bool btnIsPressed = (digitalRead(BOOT_BTN_PIN) == LOW);
+        
+        if (btnIsPressed && !isPressed) {
+            pressStart = millis();
+            isPressed = true;
+            longPressFired = false;
+            lastActivityTime = millis();
+        }
+        else if (!btnIsPressed && isPressed) {
+            isPressed = false;
+            if (!longPressFired) {
+                clickCount++;
+                releaseTime = millis();
+            }
+        }
+        else if (btnIsPressed && isPressed) {
+            if (!longPressFired && (millis() - pressStart >= BOOT_LONG_PRESS_MS)) {
+                flagLongPress = true;
+                longPressFired = true;
+                clickCount = 0;
+            }
+        }
+        else if (!btnIsPressed && !isPressed) {
+            if (clickCount > 0 && (millis() - releaseTime > 400)) {
+                if (clickCount == 1) {
+                    flagSingleClick = true;
+                    Serial.println("Button: Single Click");
+                }
+                else if (clickCount >= 2) {
+                    flagDoubleClick = true;
+                    Serial.println("Button: Double Click");
+                }
+                clickCount = 0;
+            }
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(20)); // 每 20ms 轮询一次按键
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
     
     pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
+    
+    // 启动独立任务处理按键，防止被耗时的测量逻辑阻塞
+    xTaskCreatePinnedToCore(buttonTask, "BtnTask", 2048, NULL, 1, NULL, 1);
     
     tester.init();
     display.init();
@@ -151,6 +212,20 @@ void handleNormalState() {
     
     if (isFirstRun || !isStatusEqual(currentStatus, lastStatus)) {
         display.renderResult(currentStatus, useFeet, isCalibrated);
+        
+        // Auto-save logic on unplug
+        if (!isFirstRun && !isAllOpen(lastStatus) && isAllOpen(currentStatus)) {
+            if (historyCount < MAX_HISTORY) {
+                for (int i = historyCount; i > 0; i--) historyLogs[i] = historyLogs[i-1];
+                historyLogs[0] = lastStatus;
+                historyCount++;
+            } else {
+                for (int i = MAX_HISTORY - 1; i > 0; i--) historyLogs[i] = historyLogs[i-1];
+                historyLogs[0] = lastStatus;
+            }
+            Serial.println("Saved to history on unplug.");
+        }
+        
         lastStatus = currentStatus;
         isFirstRun = false;
         lastActivityTime = millis();
@@ -158,120 +233,110 @@ void handleNormalState() {
 }
 
 void loop() {
-    // 读取 BOOT 按键
-    bool btnIsPressed = (digitalRead(BOOT_BTN_PIN) == LOW);
+    bool singleClick = flagSingleClick; flagSingleClick = false;
+    bool doubleClick = flagDoubleClick; flagDoubleClick = false;
+    bool longPress = flagLongPress; flagLongPress = false;
     
-    if (btnIsPressed && !btnWasPressed) {
-        btnPressStart = millis();
-        lastActivityTime = millis();
-    }
-    
-    // 优先处理超时逻辑
     if (appState == STATE_UNCALIBRATED_WARNING) {
-        if (!btnIsPressed && !btnWasPressed && (millis() - warningStartTime >= UNCALIBRATED_WARNING_TIMEOUT_MS)) {
+        if (millis() - warningStartTime >= UNCALIBRATED_WARNING_TIMEOUT_MS) {
             appState = STATE_NORMAL;
             isFirstRun = true;
             Serial.println("Skipped calibration warning (timeout).");
         }
     }
     
-    // 按键松开检测
-    if (!btnIsPressed && btnWasPressed) {
-        uint32_t pressDuration = millis() - btnPressStart;
-        
+    if (singleClick || doubleClick || longPress) {
         if (appState == STATE_UNCALIBRATED_WARNING) {
-            if (pressDuration >= BOOT_LONG_PRESS_MS) {
-                // 长按进入校准
+            if (longPress) {
                 appState = STATE_CALIB_WAIT_EMPTY;
                 display.renderCalibStep1();
-                Serial.println("Enter Calibration from Warning: Wait for empty plug...");
-            } else if (pressDuration > 50) {
-                // 短按跳过警告，进入正常测线模式（无长度）
+            } else if (singleClick) {
                 appState = STATE_NORMAL;
                 isFirstRun = true;
-                Serial.println("Skipped calibration warning (button).");
             }
         }
         else if (appState == STATE_NORMAL) {
-            if (pressDuration >= BOOT_LONG_PRESS_MS) {
-                // 长按 2 秒进入校准
+            if (longPress) {
                 appState = STATE_CALIB_WAIT_EMPTY;
                 display.renderCalibStep1();
-                Serial.println("Enter Calibration: Wait for empty plug...");
-            } else if (pressDuration > 50) {
-                // 短按切换单位
+            } else if (singleClick) {
                 useFeet = !useFeet;
                 prefs.begin("cable_test", false);
                 prefs.putBool("useFeet", useFeet);
                 prefs.end();
-                isFirstRun = true; // 强制刷新界面
-                Serial.printf("Toggled unit to %s\n", useFeet ? "feet" : "meters");
-            }
-        } 
-        else if (appState == STATE_CALIB_WAIT_EMPTY && pressDuration < 1000) {
-            // 短按：尝试完成第一步
-            CableStatus s = tester.runTest();
-            if (!isAllOpen(s)) {
-                // 如果存在短路，大概率是插座里的开关没被顶开，说明没插空头
-                display.renderCalibError("Short Detected!", "Insert EMPTY plug.");
-                Serial.println("Calibration Error: Short detected in Step 1. Please insert a bare empty plug.");
-                delay(2000);
-                display.renderCalibStep1(); // 恢复提示
-                return; // 拒绝进入下一步
-            }
-
-            display.renderMeasuring(); // 显示正在测量...
-            delay(100);
-            
-            sampleCapacitance(tempBaseCycles);
-            Serial.printf("Base cycles: %u, %u, %u, %u\n", tempBaseCycles[0], tempBaseCycles[1], tempBaseCycles[2], tempBaseCycles[3]);
-            
-            appState = STATE_CALIB_WAIT_76INCH;
-            display.renderCalibStep2();
-        }
-        else if (appState == STATE_CALIB_WAIT_76INCH && pressDuration < 1000) {
-            // 短按：完成第二步
-            display.renderMeasuring(); // 显示正在测量...
-            delay(100);
-            
-            uint32_t testCycles[4];
-            sampleCapacitance(testCycles);
-            Serial.printf("76-inch cycles: %u, %u, %u, %u\n", testCycles[0], testCycles[1], testCycles[2], testCycles[3]);
-            
-            bool valid = true;
-            uint32_t cyclesPerM[4];
-            for (int i = 0; i < 4; i++) {
-                if (testCycles[i] <= tempBaseCycles[i]) {
-                    valid = false;
-                    break;
+                isFirstRun = true;
+            } else if (doubleClick) {
+                if (historyCount > 0) {
+                    appState = STATE_HISTORY_VIEW;
+                    historyIndex = 0;
+                    display.renderHistory(historyLogs[historyIndex], useFeet, historyIndex, historyCount);
+                } else {
+                    display.renderCalibError("No History!", "Test a cable first.");
+                    delay(1000);
+                    isFirstRun = true; // Force redraw normal screen
                 }
-                uint32_t delta = testCycles[i] - tempBaseCycles[i];
-                cyclesPerM[i] = (uint32_t)(delta / CableTester::CALIBRATION_CABLE_LENGTH_M);
             }
-            
-            if (valid) {
-                saveCalibration(tempBaseCycles, cyclesPerM);
-                display.renderCalibDone();
-            } else {
-                display.renderCalibFailed();
-                Serial.println("Calibration Failed: Some 76-inch cycles <= Base cycles.");
+        }
+        else if (appState == STATE_HISTORY_VIEW) {
+            if (singleClick) {
+                historyIndex = (historyIndex + 1) % historyCount;
+                display.renderHistory(historyLogs[historyIndex], useFeet, historyIndex, historyCount);
+            } else if (doubleClick || longPress) {
+                appState = STATE_NORMAL;
+                isFirstRun = true;
             }
-            
-            delay(2000);
-            
-            appState = STATE_NORMAL;
-            isFirstRun = true; // 强制刷新主界面
+        }
+        else if (appState == STATE_CALIB_WAIT_EMPTY) {
+            if (singleClick) {
+                CableStatus s = tester.runTest();
+                if (!isAllOpen(s)) {
+                    display.renderCalibError("Short Detected!", "Insert EMPTY plug.");
+                    delay(2000);
+                    display.renderCalibStep1();
+                } else {
+                    display.renderMeasuring();
+                    delay(100);
+                    sampleCapacitance(tempBaseCycles);
+                    appState = STATE_CALIB_WAIT_76INCH;
+                    display.renderCalibStep2();
+                }
+            }
+        }
+        else if (appState == STATE_CALIB_WAIT_76INCH) {
+            if (singleClick) {
+                display.renderMeasuring();
+                delay(100);
+                uint32_t testCycles[4];
+                sampleCapacitance(testCycles);
+                
+                bool valid = true;
+                uint32_t cyclesPerM[4];
+                for (int i = 0; i < 4; i++) {
+                    if (testCycles[i] <= tempBaseCycles[i]) {
+                        valid = false;
+                        break;
+                    }
+                    uint32_t delta = testCycles[i] - tempBaseCycles[i];
+                    cyclesPerM[i] = (uint32_t)(delta / CableTester::CALIBRATION_CABLE_LENGTH_M);
+                }
+                
+                if (valid) {
+                    saveCalibration(tempBaseCycles, cyclesPerM);
+                    display.renderCalibDone();
+                } else {
+                    display.renderCalibFailed();
+                }
+                delay(2000);
+                appState = STATE_NORMAL;
+                isFirstRun = true;
+            }
         }
     }
     
-    btnWasPressed = btnIsPressed;
-    
-    // 只有在 NORMAL 状态下才跑正常的测线逻辑
     if (appState == STATE_NORMAL) {
         handleNormalState();
     }
     
-    // 自动休眠判断 (1分钟无操作/无状态改变)
     if (millis() - lastActivityTime > 60000) {
         Serial.println("Inactivity timeout. Entering deep sleep...");
         display.sleep();
@@ -279,5 +344,5 @@ void loop() {
         esp_deep_sleep_start();
     }
     
-    delay(50); // 主循环略微减速，让按键手感好点
+    delay(20); 
 }

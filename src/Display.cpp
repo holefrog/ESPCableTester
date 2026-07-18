@@ -84,39 +84,71 @@ void Display::renderResult(const CableStatus& status, bool useFeet, bool isCalib
     // 在黄蓝交界处画一条分割线 (y=15是黄区的底边缘)
     u8g2.drawLine(0, 15, 127, 15);
     
-    // ==========================================
     // 2. 蓝色区域 (底端 48 像素，y: 16~63)
     // ==========================================
-    // 辅助闭包函数
-    auto drawLine = [&](int y, const char* label, TestResult res, float len, uint8_t shortWire) {
-        u8g2.setCursor(0, y);
-        u8g2.print(label);
-        
-        char buf[16];
-        if (res == TestResult::SHORT_OR_CROSS) {
-            if (shortWire == 0) {
-                snprintf(buf, sizeof(buf), "SHT(GND)");
-            } else {
-                snprintf(buf, sizeof(buf), "SHT(%d)", shortWire);
-            }
-        } else if (res == TestResult::OPEN) {
-            float displayLen = useFeet ? (len * 3.28084f) : len;
-            const char* unit = useFeet ? "ft" : "m";
-            snprintf(buf, sizeof(buf), "%.1f%s", displayLen, unit);
-        } else {
-            snprintf(buf, sizeof(buf), "%s", statusToStr(res));
-        }
-        
-        u8g2.drawStr(128 - u8g2.getStrWidth(buf), y, buf);
-    };
-    
-    // 均分蓝区的 48 像素高度：四根基准线分别放在 27, 39, 51, 63
-    drawLine(27, "1-2 (Org):", status.pair1, status.len1, status.shortWire1); // 缩写颜色避免越界
-    drawLine(39, "3-6 (Grn):", status.pair2, status.len2, status.shortWire2);
-    drawLine(51, "4-5 (Blu):", status.pair3, status.len3, status.shortWire3);
-    drawLine(63, "7-8 (Brn):", status.pair4, status.len4, status.shortWire4);
+    drawGraphicalWiremap(16, status, useFeet);
     
     u8g2.sendBuffer(); // 将内存缓冲一次性推送到 OLED 进行物理刷新
+}
+
+void Display::drawGraphicalWiremap(int yOffset, const CableStatus& status, bool useFeet) {
+    auto drawPair = [&](int y, const char* name, TestResult res, float len, uint8_t shortWire) {
+        u8g2.setCursor(0, y);
+        u8g2.print(name); 
+        
+        int lineX1 = 22;
+        int lineX2 = 55;
+        int lineY = y - 3;
+        
+        if (res == TestResult::PASS) {
+            u8g2.drawLine(lineX1, lineY, lineX2, lineY);
+            // Draw a loop back box
+            u8g2.drawFrame(lineX2, lineY - 2, 4, 5);
+            u8g2.drawStr(lineX2 + 8, y, "PASS");
+        } 
+        else if (res == TestResult::OPEN) {
+            u8g2.drawLine(lineX1, lineY, lineX1 + 10, lineY);
+            u8g2.drawStr(lineX1 + 13, y+1, "x");
+            
+            char buf[16];
+            float displayLen = useFeet ? (len * 3.28084f) : len;
+            snprintf(buf, sizeof(buf), "%.1f%s", displayLen, useFeet ? "ft" : "m");
+            u8g2.drawStr(lineX2 + 8, y, buf);
+        }
+        else if (res == TestResult::SHORT_OR_CROSS) {
+            u8g2.drawLine(lineX1, lineY, lineX2, lineY);
+            // Draw a short to ground symbol
+            u8g2.drawLine(lineX1 + 15, lineY, lineX1 + 15, lineY + 4);
+            u8g2.drawLine(lineX1 + 12, lineY + 4, lineX1 + 18, lineY + 4);
+            
+            char buf[16];
+            if (shortWire == 0) snprintf(buf, sizeof(buf), "SHT(GND)");
+            else snprintf(buf, sizeof(buf), "SHT(%d)", shortWire);
+            u8g2.drawStr(lineX2 + 8, y, buf);
+        }
+    };
+    
+    drawPair(yOffset + 11, "1-2", status.pair1, status.len1, status.shortWire1);
+    drawPair(yOffset + 23, "3-6", status.pair2, status.len2, status.shortWire2);
+    drawPair(yOffset + 35, "4-5", status.pair3, status.len3, status.shortWire3);
+    drawPair(yOffset + 47, "7-8", status.pair4, status.len4, status.shortWire4);
+}
+
+void Display::renderHistory(const CableStatus& status, bool useFeet, int index, int total) {
+    u8g2.clearBuffer();
+    
+    u8g2.setFont(u8g2_font_ncenB08_tr);
+    char topBuf[32];
+    snprintf(topBuf, sizeof(topBuf), "History [%d/%d]", index + 1, total);
+    
+    int w = u8g2.getStrWidth(topBuf);
+    u8g2.drawStr((128 - w) / 2, 12, topBuf);
+    
+    u8g2.drawLine(0, 15, 127, 15);
+    
+    drawGraphicalWiremap(16, status, useFeet);
+    
+    u8g2.sendBuffer();
 }
 
 void Display::renderCalibStep1() {
