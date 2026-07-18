@@ -171,6 +171,32 @@ TestResult CableTester::testSinglePair(uint8_t txPin, uint8_t expectedRxPin,
 
   // 3. 根据读取结果判定该线对的最终状态
   if (hasShort) {
+    // 高级 TDR 故障定位尝试：将所有非测试引脚设为悬空（高阻态）
+    // 这样如果 rxPin 短路到了其它开路的线上，我们可以测量它们并联的寄生电容
+    for (int i = 0; i < 8; i++) {
+      pinMode(PINS[i], INPUT);
+    }
+    
+    uint32_t totalCycles = 0;
+    for (int i = 0; i < PHASE_LOCK_SAMPLES; i++) {
+      uint32_t t0 = micros();
+      totalCycles += measureCapacitanceCycles(txPin, expectedRxPin);
+      while (micros() - t0 < PHASE_LOCK_INTERVAL_US) {}
+    }
+    uint32_t avgCycles = totalCycles / PHASE_LOCK_SAMPLES;
+    
+    // 恢复下拉，防止影响后续测试
+    for (int i = 0; i < 8; i++) {
+      pinMode(PINS[i], INPUT_PULLDOWN);
+    }
+    
+    if (avgCycles < TIMEOUT_CYCLES) {
+      outCycles = avgCycles;
+      // 经验法则：短接导致两根线的电容并联，因此测出来的长度翻倍。
+      // 除以 2 往往能得到非常接近实际故障点（短接点）的物理距离！
+      outLength = cyclesToMeters(avgCycles, pairIndex) / 2.0f;
+    }
+    
     return TestResult::SHORT_OR_CROSS;
   }
 

@@ -233,9 +233,16 @@ void Display::drawGraphicalWiremap(int startY, const CableStatus& status, bool u
             u8g2.drawLine(lineX1 + 15, lineY, lineX1 + 15, lineY + 4);
             u8g2.drawLine(lineX1 + 12, lineY + 4, lineX1 + 18, lineY + 4);
             
-            char buf[16];
+            char buf[32];
             if (shortWire == 0) snprintf(buf, sizeof(buf), "SHT(?)");
-            else snprintf(buf, sizeof(buf), "SHT(%d)", shortWire);
+            else {
+                if (len > 0.0f) {
+                    float displayLen = useFeet ? (len * 3.28084f) : len;
+                    snprintf(buf, sizeof(buf), "SHT@%.1f%s", displayLen, useFeet ? "ft" : "m");
+                } else {
+                    snprintf(buf, sizeof(buf), "SHT(%d)", shortWire);
+                }
+            }
             u8g2.drawStr(lineX2 + 8, y, buf);
         }
     };
@@ -312,6 +319,14 @@ void Display::renderCalibError(const char* line1, const char* line2) {
     u8g2.sendBuffer();
 }
 
+void Display::renderMessage(const char* msg) {
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_ncenB10_tr);
+    int w = u8g2.getStrWidth(msg);
+    u8g2.drawStr((128 - w) / 2, 35, msg);
+    u8g2.sendBuffer();
+}
+
 void Display::renderUncalibratedWarning(uint32_t timeoutSec) {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_ncenB08_tr);
@@ -337,4 +352,51 @@ void Display::sleep() {
     u8g2.clearBuffer();
     u8g2.sendBuffer();
     u8g2.setPowerSave(1); // Turn off display to save power
+}
+
+void Display::renderSettings(int selectedIndex, bool useFeet, bool soundOn) {
+    u8g2.clearBuffer();
+    
+    // Header
+    u8g2.setFont(u8g2_font_ncenB08_tr);
+    const char* title = "--- Settings ---";
+    int w = u8g2.getStrWidth(title);
+    u8g2.drawStr((128 - w) / 2, 12, title);
+    u8g2.drawLine(0, 15, 127, 15);
+    
+    // Menu items
+    const int maxVisible = 3;
+    int scrollOffset = 0;
+    if (selectedIndex >= maxVisible) {
+        scrollOffset = selectedIndex - maxVisible + 1;
+    }
+    
+    const int MENU_COUNT = 6;
+    for (int i = 0; i < maxVisible; i++) {
+        int itemIndex = scrollOffset + i;
+        if (itemIndex >= MENU_COUNT) break;
+        
+        int yPos = 30 + i * 15;
+        
+        // Highlight cursor
+        if (itemIndex == selectedIndex) {
+            u8g2.drawBox(0, yPos - 11, 128, 14);
+            u8g2.setDrawColor(0); // Text color black on white
+        }
+        
+        char buf[32];
+        switch(itemIndex) {
+            case 0: snprintf(buf, sizeof(buf), "1. View History"); break;
+            case 1: snprintf(buf, sizeof(buf), "2. Clear History"); break;
+            case 2: snprintf(buf, sizeof(buf), "3. Unit: %s", useFeet ? "ft" : "m"); break;
+            case 3: snprintf(buf, sizeof(buf), "4. Sound: %s", soundOn ? "ON" : "OFF"); break;
+            case 4: snprintf(buf, sizeof(buf), "5. Calibrate"); break;
+            case 5: snprintf(buf, sizeof(buf), "6. Exit"); break;
+        }
+        
+        u8g2.drawStr(4, yPos, buf);
+        u8g2.setDrawColor(1); // Restore text color
+    }
+    
+    u8g2.sendBuffer();
 }

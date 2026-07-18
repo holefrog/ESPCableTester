@@ -29,7 +29,8 @@ enum AppState {
   STATE_NORMAL,
   STATE_HISTORY_VIEW,
   STATE_CALIB_WAIT_EMPTY,
-  STATE_CALIB_WAIT_76INCH
+  STATE_CALIB_WAIT_76INCH,
+  STATE_SETTINGS
 };
 AppState appState = STATE_NORMAL;
 uint32_t btnPressStart = 0;
@@ -37,6 +38,8 @@ bool btnWasPressed = false;
 uint32_t tempBaseCycles[4] = {0, 0, 0, 0};
 bool useFeet = true;       // 默认单位为 feet
 bool isCalibrated = false; // 是否已经校准过
+bool soundOn = true;
+int menuIndex = 0;
 
 const uint32_t UNCALIBRATED_WARNING_TIMEOUT_MS = 8000;
 const uint32_t BOOT_LONG_PRESS_MS = 2000; // 长按判断阈值
@@ -175,11 +178,11 @@ void loadCalibration() {
     perM[i] = prefs.getUInt(pKey, CableTester::DEFAULT_CYCLES_PER_M);
   }
   useFeet = prefs.getBool("useFeet", true); // 读取单位偏好
+  soundOn = prefs.getBool("soundOn", true);
   prefs.end();
-
+  
   tester.setCalibrationData(base, perM);
-  printf("Loaded Calib: 4-Pair OK, useFeet=%d, isCalib=%d\n", useFeet,
-         isCalibrated);
+  printf("Loaded Calib: 4-Pair OK, useFeet=%d, sound=%d, isCalib=%d\n", useFeet, soundOn, isCalibrated);
 }
 
 void saveCalibration(const uint32_t base[4], const uint32_t perM[4]) {
@@ -399,25 +402,56 @@ void loop() {
       }
     } else if (appState == STATE_NORMAL) {
       if (longPress) {
-        appState = STATE_CALIB_WAIT_EMPTY;
-        display.renderCalibStep1();
-      } else if (singleClick) {
-        useFeet = !useFeet;
-        prefs.begin("cable_test", false);
-        prefs.putBool("useFeet", useFeet);
-        prefs.end();
+        appState = STATE_SETTINGS;
+        menuIndex = 0;
         isFirstRun = true;
+      }
+    } else if (appState == STATE_SETTINGS) {
+      if (singleClick) {
+        menuIndex = (menuIndex + 1) % 6;
+        display.renderSettings(menuIndex, useFeet, soundOn);
       } else if (doubleClick) {
-        if (historyCount > 0) {
-          appState = STATE_HISTORY_VIEW;
+        if (menuIndex == 0) {
+          if (historyCount > 0) {
+            appState = STATE_HISTORY_VIEW;
+            historyIndex = 0;
+            display.renderHistory(historyLogs[historyIndex], useFeet,
+                                  historyIndex, historyCount);
+          } else {
+            display.renderMessage("No History!");
+            delay(1000);
+            display.renderSettings(menuIndex, useFeet, soundOn);
+          }
+        } else if (menuIndex == 1) {
+          historyCount = 0;
           historyIndex = 0;
-          display.renderHistory(historyLogs[historyIndex], useFeet,
-                                historyIndex, historyCount);
-        } else {
-          display.renderCalibError("No History!", "Test a cable first.");
+          saveHistoryToFlash();
+          printf("History Cleared!\n");
+          display.renderMessage("History Cleared!");
           delay(1000);
-          isFirstRun = true; // Force redraw normal screen
+          display.renderSettings(menuIndex, useFeet, soundOn);
+        } else if (menuIndex == 2) {
+          useFeet = !useFeet;
+          prefs.begin("cable_test", false);
+          prefs.putBool("useFeet", useFeet);
+          prefs.end();
+          display.renderSettings(menuIndex, useFeet, soundOn);
+        } else if (menuIndex == 3) {
+          soundOn = !soundOn;
+          prefs.begin("cable_test", false);
+          prefs.putBool("soundOn", soundOn);
+          prefs.end();
+          display.renderSettings(menuIndex, useFeet, soundOn);
+        } else if (menuIndex == 4) {
+          appState = STATE_CALIB_WAIT_EMPTY;
+          display.renderCalibStep1();
+        } else if (menuIndex == 5) {
+          appState = STATE_NORMAL;
+          isFirstRun = true;
         }
+      } else if (longPress) {
+        appState = STATE_NORMAL;
+        isFirstRun = true;
       }
     } else if (appState == STATE_HISTORY_VIEW) {
       if (singleClick) {
@@ -477,6 +511,9 @@ void loop() {
 
   if (appState == STATE_NORMAL) {
     handleNormalState();
+  } else if (appState == STATE_SETTINGS && isFirstRun) {
+    display.renderSettings(menuIndex, useFeet, soundOn);
+    isFirstRun = false;
   }
 
   if (millis() - lastActivityTime > SLEEP_TIMEOUT_MINUTES * 60 * 1000UL) {

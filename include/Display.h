@@ -35,6 +35,12 @@ public:
     void renderCalibFailed();
     void renderCalibError(const char* line1, const char* line2);
     
+    // 显示通用提示信息
+    void renderMessage(const char* msg);
+    
+    // 渲染设置菜单
+    void renderSettings(int selectedIndex, bool useFeet, bool soundOn);
+    
     // 未校准提示界面
     void renderUncalibratedWarning(uint32_t timeoutSec);
 
