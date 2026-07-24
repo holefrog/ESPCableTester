@@ -1,3 +1,25 @@
+/**
+ * @file AppConfig.cpp
+ * @brief AppConfig 实现——NVS 读写与历史 FIFO 管理
+ *
+ * NVS Key 映射
+ * ------------
+ * "cable_test" 命名空间：
+ *   b0~b3    uint32  各线对基准充电周期数（空载基准）
+ *   p0~p3    uint32  各线对每米充电周期增量（校准系数）
+ *   useFeet  bool    长度单位偏好
+ *   soundOn  bool    蜂鸣器开关偏好
+ *
+ * "cable_history" 命名空间：
+ *   hCount   int32   当前有效历史记录条数
+ *   hLogs    bytes   CableStatus 数组的二进制序列化（sizeof(historyLogs) 字节）
+ *
+ * FIFO 逻辑
+ * ---------
+ * - 未满时：historyLogs[historyCount++] = 新记录
+ * - 已满时：向左平移一位（[i] = [i+1]），再写入 [MAX_HISTORY-1]
+ *   结果：下标 0 始终是最旧记录，下标 historyCount-1 始终是最新记录
+ */
 #include "AppConfig.h"
 #include <Preferences.h>
 

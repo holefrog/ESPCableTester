@@ -1,3 +1,36 @@
+/**
+ * @file Display.h
+ * @brief OLED 屏幕渲染模块 —— U8g2 驱动封装，128×64 像素显示管理
+ *
+ * 屏幕坐标系
+ * ----------
+ * 原点 (0,0) 在左上角，x 向右，y 向下，最大 (127, 63)。
+ * U8g2 中 drawStr(x, y, str) 的 y 是文字基线（baseline）而非顶部！
+ *
+ * 布局分区（renderResult / renderHistory）
+ * -----------------------------------------
+ *  y: 0~14   "黄色区" 顶部信息栏（长度 / FAULT / Loopback Mode）
+ *  y: 15     分割线
+ *  y: 16~63  "蓝色区" 底部 Wiremap 显示区（图形走线或文字状态行）
+ *
+ * Wiremap 两种模式
+ * ----------------
+ * 1. **正常模式**（drawNormalWiremap）：4 行文字，每行显示一个线对的通断状态 + 长度
+ * 2. **故障模式**（drawFaultWiremap）：8 列图形走线，贪心算法推导短路拓扑，
+ *    上下各印数字 1-8，线条交叉即为错线，X 号即为断路
+ *
+ * 字体使用策略
+ * ------------
+ * u8g2_font_ncenB10_tr   较大字体，用于标题和重点信息（高约 10px）
+ * u8g2_font_ncenB08_tr   标准字体，用于正文内容（高约 8px）
+ * u8g2_font_5x7_tr       极小字体，用于 Wiremap 的数字标签（高约 7px）
+ *
+ * 防闪烁设计
+ * ----------
+ * 所有 render* 函数均先调用 clearBuffer()，在内存中完成全部绘制，
+ * 最后统一调用 sendBuffer() 一次性推送到 OLED，避免屏幕撕裂。
+ */
+
 #ifndef DISPLAY_H
 #define DISPLAY_H
 

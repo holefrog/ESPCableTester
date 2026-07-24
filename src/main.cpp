@@ -1,3 +1,61 @@
+/**
+ * @file main.cpp
+ * @brief 主程序入口 —— 状态机调度、按键分发、测线循环
+ *
+ * 项目概览
+ * --------
+ * ESP32 单端网线测试仪。用户只需在远端插入物理短接水晶头，
+ * 近端 OLED 屏幕即可显示：通断状态、错线拓扑图、线缆长度估算、历史记录。
+ *
+ * 模块依赖关系
+ * ------------
+ *
+ *   main.cpp
+ *   ├── ButtonHandler   按键事件（单击/双击/长按）→ 驱动状态转移
+ *   ├── CableTester     执行 TDR 测量 → 返回 CableStatus 结构体
+ *   ├── Display         将 CableStatus 渲染到 OLED 屏幕
+ *   └── AppConfig       读写 NVS Flash（偏好设置、校准参数、历史记录）
+ *
+ * 双核分工
+ * --------
+ * Core 0（PRO CPU）: 暂未使用（FreeRTOS 系统任务）
+ * Core 1（APP CPU）: 主循环 loop() + ButtonHandler 后台任务
+ *   - ButtonHandler 任务轻量（仅 20ms 轮询一次 digitalRead），
+ *     不会与主循环的 TDR 测量（寄存器直读）产生 APB 总线竞争。
+ *
+ * 主状态机
+ * --------
+ *
+ *  ┌─────────────────────────┐
+ *  │ STATE_UNCALIBRATED_     │  开机无校准数据时显示警告，8 秒或任意键后进入 NORMAL
+ *  │ WARNING                 │
+ *  └──────────┬──────────────┘
+ *             │ 超时 / 任意键
+ *             ▼
+ *  ┌─────────────────────────┐  长按
+ *  │ STATE_NORMAL            │──────────► STATE_SETTINGS
+ *  │ 持续测线并刷新屏幕       │
+ *  └─────────────────────────┘
+ *
+ *  STATE_SETTINGS ──单击──► 菜单循环（MENU_COUNT 项）
+ *                 ──双击──► 执行菜单项（查看历史 / 校准 / 切换单位等）
+ *                 ──长按──► 返回 STATE_NORMAL
+ *
+ *  STATE_HISTORY_VIEW ──单击──► 翻到下一条记录
+ *                     ──长按/双击──► 返回 STATE_SETTINGS
+ *
+ *  STATE_CALIB_WAIT_EMPTY ──任意键──► 采样空载基准 → STATE_CALIB_WAIT_76INCH
+ *  STATE_CALIB_WAIT_76INCH ──任意键──► 采样 76 英寸线 → 计算校准系数 → STATE_NORMAL
+ *
+ * 关键全局变量
+ * ------------
+ * appState      当前状态机状态
+ * menuIndex     设置菜单当前选中项（0 ~ MENU_COUNT-1）
+ * isFirstRun    进入 STATE_NORMAL 后是否为第一次测量（跳过防抖直接显示）
+ * historyIndex  历史记录翻页指针（UI 导航状态，不属于 AppConfig）
+ * lastStatus    上一次显示的测量结果（用于防止重复写历史）
+ * tempBaseCycles 校准过程中暂存的第一步空载基准值
+ */
 #include "CableTester.h"
 #include "Display.h"
 #include "ButtonHandler.h"

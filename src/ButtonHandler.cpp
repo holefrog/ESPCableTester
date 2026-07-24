@@ -1,14 +1,38 @@
+/**
+ * @file ButtonHandler.cpp
+ * @brief 按键处理模块实现
+ *
+ * 时序常量说明
+ * ------------
+ * BOOT_LONG_PRESS_MS      2000ms  持续按下超过此时间触发长按
+ * BTN_DOUBLE_CLICK_TIMEOUT_MS 400ms  松开后等待此时间判断是否双击
+ * BTN_POLL_INTERVAL_MS      20ms  按键轮询间隔（也是消抖的最小分辨率）
+ *
+ * 状态机流程（task 函数内）
+ * --------------------------
+ *   [按下沿]  pressStart = now, isPressed = true
+ *   [持续按下] 超 2000ms → 置 flagLongPress, longPressFired = true
+ *   [松开沿]  !longPressFired → clickCount++, releaseTime = now
+ *   [持续松开] clickCount>0 且距松开已超 400ms → 判定单击或双击并置标志
+ */
 #include "ButtonHandler.h"
 
-static const int BOOT_BTN_PIN = 0;
-static const uint32_t BOOT_LONG_PRESS_MS = 2000;
-static const uint32_t BTN_DOUBLE_CLICK_TIMEOUT_MS = 400;
-static const uint32_t BTN_POLL_INTERVAL_MS = 20;
+// =========================================================================
+// 硬件常量
+// =========================================================================
+static const int      BOOT_BTN_PIN              = 0;     ///< ESP32 BOOT 按键（低电平有效）
+static const uint32_t BOOT_LONG_PRESS_MS        = 2000;  ///< 长按判定阈值（毫秒）
+static const uint32_t BTN_DOUBLE_CLICK_TIMEOUT_MS = 400; ///< 双击等待窗口（毫秒）
+static const uint32_t BTN_POLL_INTERVAL_MS      = 20;    ///< 轮询间隔（毫秒）
 
-static volatile bool flagSingleClick = false;
-static volatile bool flagDoubleClick = false;
-static volatile bool flagLongPress = false;
-static volatile uint32_t lastActivityTime = 0;
+// =========================================================================
+// 事件标志位（由 task 写入，由 getEvent() 消费清零）
+// volatile 确保跨核心/中断可见性
+// =========================================================================
+static volatile bool     flagSingleClick   = false;
+static volatile bool     flagDoubleClick   = false;
+static volatile bool     flagLongPress     = false;
+static volatile uint32_t lastActivityTime  = 0;  ///< 最后一次活动时间（ms），用于空闲超时
 
 void ButtonHandler::init() {
     pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
