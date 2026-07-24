@@ -54,8 +54,15 @@ private:
     // 将枚举结果转为对应的可读字符串
     const char* statusToStr(TestResult res);
     
-    // 辅助函数：绘制图形化线序
+    // 辅助函数：绘制图形化线序（顶层分发）
     void drawGraphicalWiremap(int yOffset, const CableStatus& status, bool useFeet);
+    // 故障模式：贪心映射 + 交叉走线图
+    void drawFaultWiremap(int startY, const CableStatus& status);
+    // 正常模式：逐对状态文字行
+    void drawNormalWiremap(int startY, const CableStatus& status, bool useFeet);
+    // 单对线状态行绘制（从 lambda 提取，便于复用）
+    void drawPairRow(int y, const char* name, TestResult res,
+                    float len, uint8_t shortWire, bool useFeet);
 };
 
 #endif // DISPLAY_H

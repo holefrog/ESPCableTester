@@ -93,164 +93,173 @@ void Display::renderResult(const CableStatus& status, bool useFeet, bool isCalib
     u8g2.sendBuffer(); // 将内存缓冲一次性推送到 OLED 进行物理刷新
 }
 
+// 顶层分发：根据是否有错线故障选择不同的绘制模式
 void Display::drawGraphicalWiremap(int startY, const CableStatus& status, bool useFeet) {
     if (status.hasFault) {
-        int xPositions[8] = {10, 25, 40, 55, 70, 85, 100, 115}; 
-        int topY = startY + 8;  // start wires at y=24
-        int botY = startY + 30; // end wires at y=46
-        
-        // 数字行
-        u8g2.setFont(u8g2_font_5x7_tr);
-        for (int i=0; i<8; i++) {
-            u8g2.setCursor(xPositions[i] - 2, startY + 6); // top numbers at y=22
-            u8g2.print(i + 1);
-            u8g2.setCursor(xPositions[i] - 2, startY + 38); // bottom numbers at y=54
-            u8g2.print(i + 1);
-        }
-        
-        // 远端物理短接环回固定标识
-        int loopbacks[4][2] = {{0,1}, {2,5}, {3,4}, {6,7}};
-        for (int l = 0; l < 4; l++) {
-            int x1 = xPositions[loopbacks[l][0]];
-            int x2 = xPositions[loopbacks[l][1]];
-            int loopY = startY + 40; // loopbacks from y=56 to 59
-            u8g2.drawLine(x1, loopY, x1, loopY + 3);
-            u8g2.drawLine(x2, loopY, x2, loopY + 3);
-            u8g2.drawLine(x1, loopY + 3, x2, loopY + 3);
-        }
-        
-        // 贪心算法：将测得的连通网映射到远端环回，推导出最合理的真实物理交叉线图
-        int farAssigned[8];
-        for(int i=0; i<8; i++) farAssigned[i] = -1;
-        bool loopbackUsed[4] = {false, false, false, false};
-        
-        // 第一轮：完美匹配的正常线对
-        for (int net = 1; net <= 8; net++) {
-            int pinsInNet[8];
-            int count = 0;
-            for(int i=0; i<8; i++) {
-                if(status.shortNets[i] == net) pinsInNet[count++] = i;
-            }
-            if (count == 2) {
-                int pA = pinsInNet[0], pB = pinsInNet[1];
-                for (int l = 0; l < 4; l++) {
-                    if (!loopbackUsed[l]) {
-                        if ((pA == loopbacks[l][0] && pB == loopbacks[l][1]) ||
-                            (pA == loopbacks[l][1] && pB == loopbacks[l][0])) {
-                            farAssigned[pA] = pA;
-                            farAssigned[pB] = pB;
-                            loopbackUsed[l] = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        
-        // 第二轮：处理错线、交叉、串扰网络
-        for (int net = 1; net <= 8; net++) {
-            int pinsInNet[8];
-            int count = 0;
-            for(int i=0; i<8; i++) {
-                if(status.shortNets[i] == net && farAssigned[i] == -1) pinsInNet[count++] = i;
-            }
-            if (count == 0) continue;
-            
-            int lbIdx = -1;
-            // 优先寻找一个共享引脚的远端环回，这样能让图画出来最直观（减少杂乱的交叉）
-            for (int l = 0; l < 4; l++) {
-                if (!loopbackUsed[l]) {
-                    if (lbIdx == -1) lbIdx = l; 
-                    for (int c=0; c<count; c++) {
-                        if (pinsInNet[c] == loopbacks[l][0] || pinsInNet[c] == loopbacks[l][1]) {
-                            lbIdx = l; break;
-                        }
-                    }
-                }
-            }
-            
-            if (lbIdx != -1) {
-                loopbackUsed[lbIdx] = true;
-                farAssigned[pinsInNet[0]] = loopbacks[lbIdx][0];
-                if (count > 1) farAssigned[pinsInNet[1]] = loopbacks[lbIdx][1];
-                // 超过两根线短路，全部合并到远端的一个引脚上，形成 Y 型合并交叉
-                for (int c = 2; c < count; c++) {
-                    farAssigned[pinsInNet[c]] = loopbacks[lbIdx][0];
-                }
-            } else {
-                // 没有可用的远端环回（理论上只有发生极其严重的乱接才会触发）
-                for (int c = 0; c < count; c++) {
-                    farAssigned[pinsInNet[c]] = pinsInNet[c];
-                }
-            }
-        }
-        
-        // 绘制线缆走线
-        for (int i=0; i<8; i++) {
-            if (farAssigned[i] != -1) {
-                // 画出漂亮的连线（交叉时会自动呈现 X 型）
-                u8g2.drawLine(xPositions[i], topY, xPositions[farAssigned[i]], botY);
-            } else {
-                // 开路状态：画一条悬空的短截线打个叉
-                u8g2.drawLine(xPositions[i], topY, xPositions[i], topY + 8);
-                u8g2.drawLine(xPositions[i] - 2, topY + 10, xPositions[i] + 2, topY + 14);
-                u8g2.drawLine(xPositions[i] - 2, topY + 14, xPositions[i] + 2, topY + 10);
-            }
-        }
-        
-        u8g2.sendBuffer();
-        return;
+        drawFaultWiremap(startY, status);
+    } else {
+        drawNormalWiremap(startY, status, useFeet);
+    }
+}
+
+// 故障模式：贪心算法推导短路网络 → 绘制交叉走线图
+void Display::drawFaultWiremap(int startY, const CableStatus& status) {
+    int xPositions[8] = {10, 25, 40, 55, 70, 85, 100, 115};
+    int topY = startY + 8;  // start wires at y=24
+    int botY = startY + 30; // end wires at y=46
+
+    // 数字行
+    u8g2.setFont(u8g2_font_5x7_tr);
+    for (int i = 0; i < 8; i++) {
+        u8g2.setCursor(xPositions[i] - 2, startY + 6); // top numbers at y=22
+        u8g2.print(i + 1);
+        u8g2.setCursor(xPositions[i] - 2, startY + 38); // bottom numbers at y=54
+        u8g2.print(i + 1);
     }
 
-    // --- DRAW NORMAL PAIR DISPLAY ---
-    u8g2.setFont(u8g2_font_ncenB08_tr);
-    auto drawPair = [&](int y, const char* name, TestResult res, float len, uint8_t shortWire) {
-        u8g2.setCursor(0, y);
-        u8g2.print(name); 
-        
-        int lineX1 = 22;
-        int lineX2 = 55;
-        int lineY = y - 3;
-        
-        if (res == TestResult::PASS) {
-            u8g2.drawLine(lineX1, lineY, lineX2, lineY);
-            // Draw a loop back box
-            u8g2.drawFrame(lineX2, lineY - 2, 4, 5);
-            u8g2.drawStr(lineX2 + 8, y, "PASS");
-        } 
-        else if (res == TestResult::OPEN) {
-            u8g2.drawLine(lineX1, lineY, lineX1 + 10, lineY);
-            u8g2.drawStr(lineX1 + 13, y+1, "x");
-            
-            char buf[16];
-            float displayLen = useFeet ? (len * 3.28084f) : len;
-            snprintf(buf, sizeof(buf), "%.1f%s", displayLen, useFeet ? "ft" : "m");
-            u8g2.drawStr(lineX2 + 8, y, buf);
+    // 远端物理短接环回固定标识
+    int loopbacks[4][2] = {{0,1}, {2,5}, {3,4}, {6,7}};
+    for (int l = 0; l < 4; l++) {
+        int x1 = xPositions[loopbacks[l][0]];
+        int x2 = xPositions[loopbacks[l][1]];
+        int loopY = startY + 40; // loopbacks from y=56 to 59
+        u8g2.drawLine(x1, loopY, x1, loopY + 3);
+        u8g2.drawLine(x2, loopY, x2, loopY + 3);
+        u8g2.drawLine(x1, loopY + 3, x2, loopY + 3);
+    }
+
+    // 贪心算法：将测得的连通网映射到远端环回，推导出最合理的真实物理交叉线图
+    int farAssigned[8];
+    for (int i = 0; i < 8; i++) farAssigned[i] = -1;
+    bool loopbackUsed[4] = {false, false, false, false};
+
+    // 第一轮：完美匹配的正常线对
+    for (int net = 1; net <= 8; net++) {
+        int pinsInNet[8];
+        int count = 0;
+        for (int i = 0; i < 8; i++) {
+            if (status.shortNets[i] == net) pinsInNet[count++] = i;
         }
-        else if (res == TestResult::SHORT_OR_CROSS) {
-            u8g2.drawLine(lineX1, lineY, lineX2, lineY);
-            // Draw a short to ground symbol
-            u8g2.drawLine(lineX1 + 15, lineY, lineX1 + 15, lineY + 4);
-            u8g2.drawLine(lineX1 + 12, lineY + 4, lineX1 + 18, lineY + 4);
-            
-            char buf[32];
-            if (shortWire == 0) snprintf(buf, sizeof(buf), "SHT(?)");
-            else {
-                if (len > 0.0f) {
-                    float displayLen = useFeet ? (len * 3.28084f) : len;
-                    snprintf(buf, sizeof(buf), "SHT@%.1f%s", displayLen, useFeet ? "ft" : "m");
-                } else {
-                    snprintf(buf, sizeof(buf), "SHT(%d)", shortWire);
+        if (count == 2) {
+            int pA = pinsInNet[0], pB = pinsInNet[1];
+            for (int l = 0; l < 4; l++) {
+                if (!loopbackUsed[l]) {
+                    if ((pA == loopbacks[l][0] && pB == loopbacks[l][1]) ||
+                        (pA == loopbacks[l][1] && pB == loopbacks[l][0])) {
+                        farAssigned[pA] = pA;
+                        farAssigned[pB] = pB;
+                        loopbackUsed[l] = true;
+                        break;
+                    }
                 }
             }
-            u8g2.drawStr(lineX2 + 8, y, buf);
         }
-    };
-    
-    drawPair(startY + 11, "1-2", status.pair1, status.len1, status.shortWire1);
-    drawPair(startY + 23, "3-6", status.pair2, status.len2, status.shortWire2);
-    drawPair(startY + 35, "4-5", status.pair3, status.len3, status.shortWire3);
-    drawPair(startY + 47, "7-8", status.pair4, status.len4, status.shortWire4);
+    }
+
+    // 第二轮：处理错线、交叉、串扰网络
+    for (int net = 1; net <= 8; net++) {
+        int pinsInNet[8];
+        int count = 0;
+        for (int i = 0; i < 8; i++) {
+            if (status.shortNets[i] == net && farAssigned[i] == -1) pinsInNet[count++] = i;
+        }
+        if (count == 0) continue;
+
+        int lbIdx = -1;
+        // 优先寻找一个共享引脚的远端环回，这样能让图画出来最直观（减少杂乱的交叉）
+        for (int l = 0; l < 4; l++) {
+            if (!loopbackUsed[l]) {
+                if (lbIdx == -1) lbIdx = l;
+                for (int c = 0; c < count; c++) {
+                    if (pinsInNet[c] == loopbacks[l][0] || pinsInNet[c] == loopbacks[l][1]) {
+                        lbIdx = l; break;
+                    }
+                }
+            }
+        }
+
+        if (lbIdx != -1) {
+            loopbackUsed[lbIdx] = true;
+            farAssigned[pinsInNet[0]] = loopbacks[lbIdx][0];
+            if (count > 1) farAssigned[pinsInNet[1]] = loopbacks[lbIdx][1];
+            // 超过两根线短路，全部合并到远端的一个引脚上，形成 Y 型合并交叉
+            for (int c = 2; c < count; c++) {
+                farAssigned[pinsInNet[c]] = loopbacks[lbIdx][0];
+            }
+        } else {
+            // 没有可用的远端环回（理论上只有发生极其严重的乱接才会触发）
+            for (int c = 0; c < count; c++) {
+                farAssigned[pinsInNet[c]] = pinsInNet[c];
+            }
+        }
+    }
+
+    // 绘制线缆走线
+    for (int i = 0; i < 8; i++) {
+        if (farAssigned[i] != -1) {
+            // 画出漂亮的连线（交叉时会自动呈现 X 型）
+            u8g2.drawLine(xPositions[i], topY, xPositions[farAssigned[i]], botY);
+        } else {
+            // 开路状态：画一条悬空的短截线打个叉
+            u8g2.drawLine(xPositions[i], topY, xPositions[i], topY + 8);
+            u8g2.drawLine(xPositions[i] - 2, topY + 10, xPositions[i] + 2, topY + 14);
+            u8g2.drawLine(xPositions[i] - 2, topY + 14, xPositions[i] + 2, topY + 10);
+        }
+    }
+
+    u8g2.sendBuffer();
+}
+
+// 辅助：绘制单对线状态行（从 lambda 提取为私有静态函数，便于独立阅读）
+void Display::drawPairRow(int y, const char* name, TestResult res,
+                          float len, uint8_t shortWire, bool useFeet) {
+    u8g2.setCursor(0, y);
+    u8g2.print(name);
+
+    int lineX1 = 22;
+    int lineX2 = 55;
+    int lineY  = y - 3;
+
+    if (res == TestResult::PASS) {
+        u8g2.drawLine(lineX1, lineY, lineX2, lineY);
+        u8g2.drawFrame(lineX2, lineY - 2, 4, 5); // 远端环回小方框
+        u8g2.drawStr(lineX2 + 8, y, "PASS");
+
+    } else if (res == TestResult::OPEN) {
+        u8g2.drawLine(lineX1, lineY, lineX1 + 10, lineY);
+        u8g2.drawStr(lineX1 + 13, y + 1, "x");
+
+        char buf[16];
+        float displayLen = useFeet ? (len * 3.28084f) : len;
+        snprintf(buf, sizeof(buf), "%.1f%s", displayLen, useFeet ? "ft" : "m");
+        u8g2.drawStr(lineX2 + 8, y, buf);
+
+    } else if (res == TestResult::SHORT_OR_CROSS) {
+        u8g2.drawLine(lineX1, lineY, lineX2, lineY);
+        // 对地短路符号
+        u8g2.drawLine(lineX1 + 15, lineY, lineX1 + 15, lineY + 4);
+        u8g2.drawLine(lineX1 + 12, lineY + 4, lineX1 + 18, lineY + 4);
+
+        char buf[32];
+        if (shortWire == 0) {
+            snprintf(buf, sizeof(buf), "SHT(?)");
+        } else if (len > 0.0f) {
+            float displayLen = useFeet ? (len * 3.28084f) : len;
+            snprintf(buf, sizeof(buf), "SHT@%.1f%s", displayLen, useFeet ? "ft" : "m");
+        } else {
+            snprintf(buf, sizeof(buf), "SHT(%d)", shortWire);
+        }
+        u8g2.drawStr(lineX2 + 8, y, buf);
+    }
+}
+
+// 正常模式：逐对显示通断状态、长度、短路位置
+void Display::drawNormalWiremap(int startY, const CableStatus& status, bool useFeet) {
+    u8g2.setFont(u8g2_font_ncenB08_tr);
+    drawPairRow(startY + 11, "1-2", status.pair1, status.len1, status.shortWire1, useFeet);
+    drawPairRow(startY + 23, "3-6", status.pair2, status.len2, status.shortWire2, useFeet);
+    drawPairRow(startY + 35, "4-5", status.pair3, status.len3, status.shortWire3, useFeet);
+    drawPairRow(startY + 47, "7-8", status.pair4, status.len4, status.shortWire4, useFeet);
 }
 
 void Display::renderHistory(const CableStatus& status, bool useFeet, int index, int total) {

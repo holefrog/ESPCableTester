@@ -43,9 +43,9 @@ uint32_t IRAM_ATTR CableTester::measureCapacitanceCycles(uint8_t txPin,
   digitalWrite(rxPin, HIGH);
   delayMicroseconds(2000); // 使用精确微秒级延时，防止 FreeRTOS 调度引起时序抖动
 
-  // 2. 强制彻底放电
+  // 彻底放电至 0V：防止残余电荷导致下一次充电曲线基准偏移（极其关键）
   digitalWrite(txPin, LOW);
-  digitalWrite(rxPin, LOW); // 刚才就是漏了这句，导致根本没放电！
+  digitalWrite(rxPin, LOW);
   delayMicroseconds(5000);  // 确保完全放电到 0V，时序严格固定
 
   // 提前将引脚转为高阻态输入，此时因为没有上拉，电容依然保持 0V
@@ -73,20 +73,31 @@ uint32_t IRAM_ATTR CableTester::measureCapacitanceCycles(uint8_t txPin,
   // 解决方案：彻底绕过 digitalRead，直接读取 ESP32 的硬件 GPIO
   // 寄存器，实现真正的零抖动 1 周期轮询！
   uint32_t pin_mask = (1 << (rxPin & 31));
+  bool timedOut = false;
   if (rxPin < 32) {
     while (((*(volatile uint32_t *)(GPIO_IN_REG)) & pin_mask) == 0) {
-      if (ESP.getCycleCount() - start > max_cycles)
+      if (ESP.getCycleCount() - start > max_cycles) {
+        timedOut = true;
         break;
+      }
     }
   } else {
     while (((*(volatile uint32_t *)(GPIO_IN1_REG)) & pin_mask) == 0) {
-      if (ESP.getCycleCount() - start > max_cycles)
+      if (ESP.getCycleCount() - start > max_cycles) {
+        timedOut = true;
         break;
+      }
     }
   }
   uint32_t end = ESP.getCycleCount();
 
   portEXIT_CRITICAL(&mux); // 恢复 RTOS 中断
+
+  // P4: 超时调试日志——帮助区分正常断路与硬件级异常
+  if (timedOut) {
+    printf("[TDR] pin %u timed out at %u cycles (expected < %u)\n",
+           rxPin, end - start, max_cycles);
+  }
 
   // 3. 恢复安全状态
   pinMode(txPin, INPUT_PULLDOWN);
