@@ -9,7 +9,6 @@ AppConfig::AppConfig() {
     soundOn = true;
     isCalibrated = false;
     historyCount = 0;
-    historyIndex = 0;
 }
 
 void AppConfig::loadAll(CableTester& tester) {
@@ -102,6 +101,5 @@ void AppConfig::addHistory(const CableStatus& status) {
 
 void AppConfig::clearHistory() {
     historyCount = 0;
-    historyIndex = 0;
     saveHistoryToFlash();
 }

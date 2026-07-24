@@ -9,6 +9,7 @@ Display display;
 
 CableStatus lastStatus;
 bool isFirstRun = true;
+int historyIndex = 0;  // UI 导航状态：当前显示的历史条目序号
 
 const unsigned long SLEEP_TIMEOUT_MINUTES = 5;
 const uint32_t UNCALIBRATED_WARNING_TIMEOUT_MS = 8000;
@@ -155,9 +156,9 @@ void handleSettings(ButtonEvent btnEvt) {
       case MENU_VIEW_HISTORY:
         if (appConfig.historyCount > 0) {
           appState = STATE_HISTORY_VIEW;
-          appConfig.historyIndex = 0;
-          display.renderHistory(appConfig.historyLogs[appConfig.historyIndex],
-                                appConfig.useFeet, appConfig.historyIndex,
+          historyIndex = 0;
+          display.renderHistory(appConfig.historyLogs[historyIndex],
+                                appConfig.useFeet, historyIndex,
                                 appConfig.historyCount);
         } else {
           display.renderMessage("No History!");
@@ -206,11 +207,12 @@ void handleSettings(ButtonEvent btnEvt) {
 // =========================================================================
 void handleHistoryView(ButtonEvent btnEvt) {
   if (btnEvt == BTN_EVENT_SINGLE_CLICK) {
-    appConfig.historyIndex = (appConfig.historyIndex + 1) % appConfig.historyCount;
-    display.renderHistory(appConfig.historyLogs[appConfig.historyIndex],
-                          appConfig.useFeet, appConfig.historyIndex,
+    historyIndex = (historyIndex + 1) % appConfig.historyCount;
+    display.renderHistory(appConfig.historyLogs[historyIndex],
+                          appConfig.useFeet, historyIndex,
                           appConfig.historyCount);
   } else if (btnEvt == BTN_EVENT_LONG_PRESS || btnEvt == BTN_EVENT_DOUBLE_CLICK) {
+    historyIndex = 0;  // 退出时重置，下次进入历史从头开始
     appState = STATE_NORMAL;
     isFirstRun = true;
   }

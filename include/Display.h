@@ -32,7 +32,6 @@ public:
     void renderCalibStep1();
     void renderCalibStep2();
     void renderCalibDone();
-    void renderCalibFailed();
     void renderCalibError(const char* line1, const char* line2);
     
     // 显示通用提示信息

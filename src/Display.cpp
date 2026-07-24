@@ -308,16 +308,6 @@ void Display::renderCalibDone() {
     u8g2.sendBuffer();
 }
 
-void Display::renderCalibFailed() {
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_ncenB10_tr);
-    u8g2.drawStr(10, 25, "FAILED!");
-    u8g2.setFont(u8g2_font_ncenB08_tr);
-    u8g2.drawStr(0, 45, "No cable detected.");
-    u8g2.drawStr(0, 60, "Value <= Base.");
-    u8g2.sendBuffer();
-}
-
 void Display::renderCalibError(const char* line1, const char* line2) {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_ncenB10_tr);

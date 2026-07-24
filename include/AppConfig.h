@@ -13,10 +13,9 @@ public:
     bool soundOn;
     bool isCalibrated;
     
-    // 历史记录
+    // 历史记录（持久化数据）
     CableStatus historyLogs[MAX_HISTORY];
     int historyCount;
-    int historyIndex;
 
     AppConfig();
 
