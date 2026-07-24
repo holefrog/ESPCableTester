@@ -94,16 +94,7 @@ enum AppState {
   STATE_SETTINGS
 };
 
-// P3: 设置菜单项枚举——新增菜单项只需在此处加一行，MENU_COUNT 自动扩展
-enum SettingsMenuItem {
-  MENU_VIEW_HISTORY  = 0,
-  MENU_CLEAR_HISTORY = 1,
-  MENU_TOGGLE_UNIT   = 2,
-  MENU_TOGGLE_SOUND  = 3,
-  MENU_CALIBRATE     = 4,
-  MENU_EXIT          = 5,
-  MENU_COUNT         // 自动计算菜单项总数，勿手动赋值
-};
+// P3: 设置菜单项枚举已移至 Display.h
 
 AppState appState = STATE_NORMAL;
 int menuIndex = 0;

@@ -370,7 +370,6 @@ void Display::renderSettings(int selectedIndex, bool useFeet, bool soundOn) {
         scrollOffset = selectedIndex - maxVisible + 1;
     }
     
-    const int MENU_COUNT = 6;
     for (int i = 0; i < maxVisible; i++) {
         int itemIndex = scrollOffset + i;
         if (itemIndex >= MENU_COUNT) break;
@@ -385,15 +384,15 @@ void Display::renderSettings(int selectedIndex, bool useFeet, bool soundOn) {
         
         char buf[32];
         switch(itemIndex) {
-            case 0: snprintf(buf, sizeof(buf), "1. View History"); break;
-            case 1: snprintf(buf, sizeof(buf), "2. Clear History"); break;
-            case 2: snprintf(buf, sizeof(buf), "3. Unit: %s", useFeet ? "ft" : "m"); break;
-            case 3: snprintf(buf, sizeof(buf), "4. Sound: %s", soundOn ? "ON" : "OFF"); break;
-            case 4: snprintf(buf, sizeof(buf), "5. Calibrate"); break;
-            case 5: snprintf(buf, sizeof(buf), "6. Exit"); break;
+            case MENU_VIEW_HISTORY: snprintf(buf, sizeof(buf), "View History"); break;
+            case MENU_CLEAR_HISTORY: snprintf(buf, sizeof(buf), "Clear History"); break;
+            case MENU_TOGGLE_UNIT: snprintf(buf, sizeof(buf), "Unit: %s", useFeet ? "ft" : "m"); break;
+            case MENU_TOGGLE_SOUND: snprintf(buf, sizeof(buf), "Sound: %s", soundOn ? "ON" : "OFF"); break;
+            case MENU_CALIBRATE: snprintf(buf, sizeof(buf), "Calibrate"); break;
+            case MENU_EXIT: snprintf(buf, sizeof(buf), "Exit"); break;
         }
         
-        u8g2.drawStr(4, yPos, buf);
+        u8g2.drawStr(10, yPos, buf);
         u8g2.setDrawColor(1); // Restore text color
     }
     
