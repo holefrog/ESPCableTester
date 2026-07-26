@@ -167,14 +167,22 @@ void handleNormalState() {
     if (!CableTester::isNoCable(currentStatus)) {
       display.renderResult(currentStatus, appConfig.useFeet, appConfig.isCalibrated);
 
-      // 统一保存逻辑：isFirstRun 时也保存，防止快速切换菜单导致历史丢失
-      if (CableTester::hasActualLength(currentStatus) || currentStatus.hasFault) {
+      // 检查是否有任何线对物理测通 (PASS)
+      bool isAnyPass = (currentStatus.pair1 == TestResult::PASS || 
+                        currentStatus.pair2 == TestResult::PASS || 
+                        currentStatus.pair3 == TestResult::PASS || 
+                        currentStatus.pair4 == TestResult::PASS);
+
+      // 统一保存逻辑：如果有故障，或者有实际长度(OPEN)，或者是通的(PASS)
+      if (CableTester::hasActualLength(currentStatus) || currentStatus.hasFault || isAnyPass) {
         if (!CableTester::isStatusEqual(currentStatus, lastStatus)) {
           lastStatus = currentStatus;
           appConfig.addHistory(currentStatus);
           
           if (currentStatus.hasFault) {
             buzzer.play(BEEP_ERROR);
+          } else if (isAnyPass) {
+            buzzer.play(BEEP_PASS);
           } else {
             buzzer.play(BEEP_LONG);
           }

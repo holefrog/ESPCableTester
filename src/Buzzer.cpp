@@ -46,6 +46,9 @@ void Buzzer::play(BeepPattern pattern) {
         case BEEP_ERROR:
             _setTone(true, 2500); // 报警音从高音开始
             break;
+        case BEEP_PASS:
+            _setTone(true, 1200); // 欢快音调起点
+            break;
         case BEEP_STARTUP:
             _setTone(true, 1000); // 开机音从较低频率开始
             break;
@@ -120,6 +123,25 @@ void Buzzer::update() {
             }
             break;
 
+        case BEEP_PASS:
+            // 欢快音调 (类似玛丽欧吃金币)：四个快速升高的音符
+            if (_statePhase == 0 && elapsed >= 60) {
+                _setTone(true, 1600);
+                _statePhase = 1;
+                _stateStartTime = millis();
+            } else if (_statePhase == 1 && elapsed >= 60) {
+                _setTone(true, 2000);
+                _statePhase = 2;
+                _stateStartTime = millis();
+            } else if (_statePhase == 2 && elapsed >= 60) {
+                _setTone(true, 2400);
+                _statePhase = 3;
+                _stateStartTime = millis();
+            } else if (_statePhase == 3 && elapsed >= 150) {
+                stop();
+            }
+            break;
+            
         case BEEP_STARTUP:
             // 升调开机音乐：1000Hz -> 1500Hz -> 2000Hz -> 2500Hz -> 3000Hz
             if (_statePhase == 0 && elapsed >= 80) {
