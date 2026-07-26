@@ -12,12 +12,12 @@ void Buzzer::begin(uint8_t pin) {
     _setTone(false);
 }
 
-void Buzzer::_setTone(bool on) {
+void Buzzer::_setTone(bool on, uint16_t freq) {
     if (_pin == 255) return;
     
     // 只有在配置中开启声音时才真正输出 PWM 方波
     if (on && appConfig.soundOn) {
-        tone(_pin, 2500); // 使用 2500Hz 的频率发声（适合大多数被动蜂鸣器的谐振频率）
+        tone(_pin, freq); // 使用指定频率发声
         _isOn = true;
     } else {
         noTone(_pin); // 停止 PWM 方波
@@ -41,9 +41,16 @@ void Buzzer::play(BeepPattern pattern) {
         case BEEP_SHORT:
         case BEEP_LONG:
         case BEEP_DOUBLE:
-        case BEEP_ERROR:
-        case BEEP_STARTUP:
             _setTone(true);
+            break;
+        case BEEP_ERROR:
+            _setTone(true, 2500); // 报警音从高音开始
+            break;
+        case BEEP_STARTUP:
+            _setTone(true, 1000); // 开机音从较低频率开始
+            break;
+        case BEEP_SLEEP:
+            _setTone(true, 3000); // 休眠音从较高频率开始
             break;
     }
 }
@@ -87,39 +94,74 @@ void Buzzer::update() {
             break;
 
         case BEEP_ERROR:
-            // 报警模式：短促的三次鸣叫 (Beep-pause-Beep-pause-Beep)
-            if (_statePhase == 0 && elapsed >= 80) {
-                _setTone(false);
+            // 报警模式：高低音交替的警报声 (Siren)，持续 1.8 秒
+            if (_statePhase == 0 && elapsed >= 300) {
+                _setTone(true, 1500);
                 _statePhase = 1;
                 _stateStartTime = millis();
-            } else if (_statePhase == 1 && elapsed >= 80) {
-                _setTone(true);
+            } else if (_statePhase == 1 && elapsed >= 300) {
+                _setTone(true, 2500);
                 _statePhase = 2;
                 _stateStartTime = millis();
-            } else if (_statePhase == 2 && elapsed >= 80) {
-                _setTone(false);
+            } else if (_statePhase == 2 && elapsed >= 300) {
+                _setTone(true, 1500);
                 _statePhase = 3;
                 _stateStartTime = millis();
-            } else if (_statePhase == 3 && elapsed >= 80) {
-                _setTone(true);
+            } else if (_statePhase == 3 && elapsed >= 300) {
+                _setTone(true, 2500);
                 _statePhase = 4;
                 _stateStartTime = millis();
-            } else if (_statePhase == 4 && elapsed >= 80) {
+            } else if (_statePhase == 4 && elapsed >= 300) {
+                _setTone(true, 1500);
+                _statePhase = 5;
+                _stateStartTime = millis();
+            } else if (_statePhase == 5 && elapsed >= 300) {
                 stop();
             }
             break;
 
         case BEEP_STARTUP:
-            // 开机音：一次中等长度鸣叫，稍微带点间隔 (也可以写成其它旋律，但由于是单频蜂鸣器，只能靠节奏)
-            if (_statePhase == 0 && elapsed >= 150) {
-                _setTone(false);
+            // 升调开机音乐：1000Hz -> 1500Hz -> 2000Hz -> 2500Hz -> 3000Hz
+            if (_statePhase == 0 && elapsed >= 80) {
+                _setTone(true, 1500);
                 _statePhase = 1;
                 _stateStartTime = millis();
-            } else if (_statePhase == 1 && elapsed >= 50) {
-                _setTone(true);
+            } else if (_statePhase == 1 && elapsed >= 80) {
+                _setTone(true, 2000);
                 _statePhase = 2;
                 _stateStartTime = millis();
-            } else if (_statePhase == 2 && elapsed >= 200) {
+            } else if (_statePhase == 2 && elapsed >= 80) {
+                _setTone(true, 2500);
+                _statePhase = 3;
+                _stateStartTime = millis();
+            } else if (_statePhase == 3 && elapsed >= 80) {
+                _setTone(true, 3000);
+                _statePhase = 4;
+                _stateStartTime = millis();
+            } else if (_statePhase == 4 && elapsed >= 120) {
+                stop();
+            }
+            break;
+            
+        case BEEP_SLEEP:
+            // 降调休眠音乐：3000Hz -> 2500Hz -> 2000Hz -> 1500Hz -> 1000Hz
+            if (_statePhase == 0 && elapsed >= 80) {
+                _setTone(true, 2500);
+                _statePhase = 1;
+                _stateStartTime = millis();
+            } else if (_statePhase == 1 && elapsed >= 80) {
+                _setTone(true, 2000);
+                _statePhase = 2;
+                _stateStartTime = millis();
+            } else if (_statePhase == 2 && elapsed >= 80) {
+                _setTone(true, 1500);
+                _statePhase = 3;
+                _stateStartTime = millis();
+            } else if (_statePhase == 3 && elapsed >= 80) {
+                _setTone(true, 1000);
+                _statePhase = 4;
+                _stateStartTime = millis();
+            } else if (_statePhase == 4 && elapsed >= 120) {
                 stop();
             }
             break;

@@ -377,8 +377,14 @@ void loop() {
   if (appState != STATE_UNCALIBRATED_WARNING) {
     if (ButtonHandler::isIdleTimeout(SLEEP_TIMEOUT_MINUTES)) {
       display.renderMessage("Sleeping...");
-      buzzer.play(BEEP_DOUBLE);
-      delay(2000);
+      buzzer.play(BEEP_SLEEP);
+      
+      uint32_t waitStart = millis();
+      while (millis() - waitStart < 1000) {
+        buzzer.update();
+        delay(10);
+      }
+      
       display.sleep();
       esp_deep_sleep_start();
     }
