@@ -59,6 +59,7 @@
 #include "CableTester.h"
 #include "Display.h"
 #include "ButtonHandler.h"
+#include "Buzzer.h"
 #include "AppConfig.h"
 #include <Arduino.h>
 
@@ -118,6 +119,7 @@ void setup() {
   ButtonHandler::init();
   tester.init();
   display.init();
+  buzzer.begin(4); // Initialize buzzer on GPIO 4
 
   appConfig.loadAll(tester);
 
@@ -125,10 +127,18 @@ void setup() {
     appState = STATE_UNCALIBRATED_WARNING;
     warningStartTime = millis();
     display.renderUncalibratedWarning(UNCALIBRATED_WARNING_TIMEOUT_MS / 1000);
+    buzzer.play(BEEP_ERROR);
   } else {
     appState = STATE_NORMAL;
     display.renderReady();
-    delay(1000);
+    buzzer.play(BEEP_STARTUP);
+    
+    // 用非阻塞循环代替 delay(1000)，以保证开机音效正常播放
+    uint32_t waitStart = millis();
+    while (millis() - waitStart < 1000) {
+      buzzer.update();
+      delay(10);
+    }
   }
 }
 
@@ -162,6 +172,12 @@ void handleNormalState() {
         if (!CableTester::isStatusEqual(currentStatus, lastStatus)) {
           lastStatus = currentStatus;
           appConfig.addHistory(currentStatus);
+          
+          if (currentStatus.hasFault) {
+            buzzer.play(BEEP_ERROR);
+          } else {
+            buzzer.play(BEEP_LONG);
+          }
         }
       }
     } else {
@@ -323,6 +339,7 @@ void handleCalibration(ButtonEvent btnEvt) {
     if (failReason == CALIB_OK) {
       appConfig.saveCalibration(tempBaseCycles, perM, tester);
       display.renderCalibDone();
+      buzzer.play(BEEP_LONG);
       delay(1000);
       appState = STATE_NORMAL;
       isFirstRun = true;
@@ -334,6 +351,7 @@ void handleCalibration(ButtonEvent btnEvt) {
         default:                   errDetail = "Check connection"; break;
       }
       display.renderCalibError("Invalid Calib", errDetail);
+      buzzer.play(BEEP_ERROR);
       delay(3000);
       appState = STATE_NORMAL;
       isFirstRun = true;
@@ -345,12 +363,21 @@ void handleCalibration(ButtonEvent btnEvt) {
 // loop：统一休眠检测 + switch 状态分发（P3 重构后核心逻辑 <20 行）
 // =========================================================================
 void loop() {
+  buzzer.update();
+
   ButtonEvent btnEvt = ButtonHandler::getEvent();
+  
+  if (btnEvt != BTN_EVENT_NONE) {
+    if (btnEvt == BTN_EVENT_SINGLE_CLICK) buzzer.play(BEEP_SHORT);
+    else if (btnEvt == BTN_EVENT_DOUBLE_CLICK) buzzer.play(BEEP_DOUBLE);
+    else if (btnEvt == BTN_EVENT_LONG_PRESS) buzzer.play(BEEP_LONG);
+  }
 
   // 统一的前置检查：非警告状态下检测空闲超时并进入深度睡眠
   if (appState != STATE_UNCALIBRATED_WARNING) {
     if (ButtonHandler::isIdleTimeout(SLEEP_TIMEOUT_MINUTES)) {
       display.renderMessage("Sleeping...");
+      buzzer.play(BEEP_DOUBLE);
       delay(2000);
       display.sleep();
       esp_deep_sleep_start();
